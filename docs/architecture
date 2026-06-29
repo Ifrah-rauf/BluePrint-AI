@@ -48,3 +48,15 @@ engineering-design-assistant/
     ├── agent_contracts.md         # the JSON input/output schema for every agent — finalize Day 1
     ├── architecture_diagram.png   # your OWN system diagram, for the README/demo
     └── demo_script.md             # what you'll say/show when presenting — write this Day 8-9
+
+
+  NODE               READS                                                               WRITES
+requirements      problem_statement                                                     requirements
+    |                                                                                   
+tech stack        requirements                                                          techstack
+    |
+architecture      requirements, techstack, revision_notes (from last critic)            architecture
+    |
+critic            architecture                                                          critic_verdict, appends to critic_history
+    |
+Assemble(graph)   ALL OF THE ABOVE                                                      final_output
