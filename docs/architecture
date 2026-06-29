@@ -1,0 +1,50 @@
+engineering-design-assistant/
+│
+├── .env.example                  # Template — everyone copies to .env locally, never commit real .env
+├── .gitignore                    # node_modules, __pycache__, .env, venv/
+├── README.md                     # Setup steps + project overview (write this Day 1, not Day 10)
+├── requirements.txt              # Python deps (shared, root level)
+│
+├── backend/
+│   ├── main.py                   # FastAPI entry point — exposes POST /design endpoint
+│   ├── graph.py                  # ⭐ Person A owns this — LangGraph state machine, wires all agents
+│   ├── state.py                  # Shared state schema (the JSON contract — define Day 1, everyone reads this)
+│   │
+│   ├── agents/
+│   │   ├── __init__.py
+│   │   ├── requirements_agent.py     # Person B
+│   │   ├── techstack_agent.py        # Person B
+│   │   ├── architecture_agent.py     # Person C
+│   │   ├── critic_agent.py           # Person C
+│   │   └── cost_estimator_agent.py   # optional, if time allows
+│   │
+│   ├── tools/
+│   │   ├── __init__.py
+│   │   ├── web_search_tool.py        # Person D
+│   │   └── rag_retrieval_tool.py     # Person D — queries Supabase pgvector
+│   │
+│   ├── rag/
+│   │   ├── ingest.py              # Person D — one-time script to embed docs into Supabase
+│   │   └── knowledge_base/        # the 10-15 curated system-design articles/docs (raw .md or .txt files)
+│   │
+│   └── tests/
+│       ├── test_requirements_agent.py
+│       ├── test_architecture_agent.py
+│       ├── test_critic_agent.py
+│       └── test_graph.py          # integration test — runs full pipeline end to end
+│
+├── frontend/                     # Person D — separate React app, talks to backend via HTTP only
+│   ├── package.json
+│   ├── src/
+│   │   ├── App.jsx
+│   │   ├── components/
+│   │   │   ├── ProblemInput.jsx
+│   │   │   ├── DesignOutput.jsx
+│   │   │   └── MermaidDiagram.jsx     # renders the Mermaid text from architecture_agent
+│   │   └── api.js                     # fetch calls to FastAPI backend
+│   └── public/
+│
+└── docs/
+    ├── agent_contracts.md         # the JSON input/output schema for every agent — finalize Day 1
+    ├── architecture_diagram.png   # your OWN system diagram, for the README/demo
+    └── demo_script.md             # what you'll say/show when presenting — write this Day 8-9
