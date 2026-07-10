@@ -34,7 +34,7 @@ def _build_mermaid_from_connects_to(components: list[dict]) -> str | None:
     return "\n".join(lines) if len(lines) > 1 else None
 
 
-def run(architecture: dict) -> dict:
+def diagram_run(architecture: dict) -> dict:
     """
     Generates a Mermaid diagram from an approved architecture.
     Uses connects_to for deterministic generation — falls back to LLM if missing.
@@ -94,7 +94,7 @@ if __name__ == "__main__":
                 revision_count=1,
             )
 
-        output = run(architecture=architecture)
+        output = diagram_run(architecture=architecture)
         print(json.dumps(output, indent=4))
         print("\n--- paste into mermaid.live ---\n")
         print(output["mermaid"])

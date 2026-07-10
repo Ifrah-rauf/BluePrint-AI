@@ -1,6 +1,9 @@
 import os
 import json
 from groq import Groq
+import dotenv
+
+dotenv.load_dotenv()
 
 client = Groq(api_key=os.environ["GROQ_API_KEY"])
 
@@ -15,3 +18,6 @@ def call_llm(system_prompt: str, *inputs) -> dict:
         response_format={"type": "json_object"}
     )
     return json.loads(response.choices[0].message.content)
+
+def get_client():
+    return client

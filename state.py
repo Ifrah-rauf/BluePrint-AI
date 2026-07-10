@@ -29,13 +29,17 @@ class ArchitectureComponent(BaseModel):
     name: str
     responsibility: str
 
-
+# UPDATED---------------------------------
 class ArchitectureOutput(BaseModel):
     design_description: str
     components: list[ArchitectureComponent]
-    mermaid_diagram: str
     tradeoffs: list[str]
+    # mermaid_diagram REMOVED from here
 
+
+class DiagramOutput(BaseModel):
+    mermaid_diagram: str
+# ----------------------------------------
 
 class CriticVerdict(BaseModel):
     verdict: str  # exactly "APPROVE" or "REVISE"
@@ -46,6 +50,7 @@ class FinalOutput(BaseModel):
     requirements: RequirementsOutput
     techstack: TechStackOutput
     architecture: ArchitectureOutput
+    diagram: DiagramOutput              # NEW
     critic_history: list[CriticVerdict]
     revision_count: int
 
@@ -53,8 +58,9 @@ class DesignState(TypedDict):
     problem_statement: str
     requirements: NotRequired[dict]
     techstack: NotRequired[dict]
-    architecture: NotRequired[dict]
+    architecture: NotRequired[dict]          # now WITHOUT mermaid_diagram
     critic_verdict: NotRequired[dict]
-    critic_history: Annotated[list[dict], operator.add]  # append across REVISE loops
+    critic_history: Annotated[list[dict], operator.add]
     revision_count: int
+    mermaid: NotRequired[dict]               # NEW — output of the diagram-only step, runs once after critic approves
     final_output: NotRequired[dict]

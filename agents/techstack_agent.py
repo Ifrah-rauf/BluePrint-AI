@@ -4,7 +4,7 @@ from prompts import TECHSTACK_PROMPT
 import sys
 import json
 #run fuction
-def run(requirements: dict) -> dict:
+def tech_run(requirements: dict) -> dict:
     """
     Recommend a technology stack based on structured requirements.
     Args:
@@ -41,7 +41,7 @@ if __name__ == "__main__":
         "assumptions": []
     }
     try:
-        output = run(sample_requirements)
+        output = tech_run(sample_requirements)
         print(json.dumps(output, indent=4))
     except RuntimeError as e:
         print(e)

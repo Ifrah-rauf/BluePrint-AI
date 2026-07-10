@@ -4,7 +4,7 @@ from prompts import REQUIREMENTS_PROMPT
 import sys
 import json
 #run fuction
-def run(problem_statement: str) -> dict:
+def req_run(problem_statement: str) -> dict:
     """
     Extract structured requirements from a software system design problem.
     Args:
@@ -39,7 +39,7 @@ if __name__ == "__main__":
             problem_statement = sys.argv[2]
     try:
         # 3. Pass the dynamic statement into your agent execution
-        output = run(problem_statement)
+        output = req_run(problem_statement)
         print(json.dumps(output, indent=4))
     except RuntimeError as e:
         print(e)

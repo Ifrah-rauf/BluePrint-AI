@@ -5,7 +5,7 @@ import sys
 import json
 
 
-def run(architecture: dict) -> dict:
+def critic_run(architecture: dict) -> dict:
     """
     Reviews an architecture and returns a verdict with specific issues.
 
@@ -50,7 +50,7 @@ if __name__ == "__main__":
         requirements = requirements_run(problem)
         techstack = techstack_run(requirements)
         architecture = architecture_run(requirements=requirements, techstack=techstack, revision_count=0)
-        output = run(architecture=architecture)
+        output = critic_run(architecture=architecture)
         print(json.dumps(output, indent=4))
     except RuntimeError as e:
         print(e)

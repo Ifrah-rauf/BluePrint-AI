@@ -1,211 +1,225 @@
-# Agent Contracts — Engineering Design Assistant
+# Blueprint-AI Graph Contract
+### Agent Specification for the LangGraph Orchestration Pipeline
 
-This is the single source of truth for every agent's input/output shape.
-**Rule: nobody changes their agent's output shape without updating this file and pinging the team.**
-
-All agents are plain Python functions: `run(...) -> dict`. The dict shape below is also what goes in `state.py` as the shared LangGraph state.
+This document defines the behavioral contract for every node in the Blueprint-AI LangGraph pipeline. It is written as an **engineering reference** — the source of truth for what each agent is responsible for, what it can touch, and what it must never touch. Any change to an agent's behavior should be checked against this contract before being merged.
 
 ---
 
-## 0. Shared State Object (lives in `backend/state.py`)
+## 1. Design Philosophy
 
-This is what flows through the entire graph. Every agent reads from it and writes back into it.
+The pipeline is built around a simple idea: **each agent does exactly one job, and does it in isolation.** Agents don't share responsibilities, don't reach into each other's outputs, and don't make decisions outside their lane. This keeps the graph predictable, testable, and easy to extend — if you need to swap out the Tech Stack Agent for a fine-tuned model tomorrow, nothing else in the pipeline should need to change.
+
+**Core principles at a glance:**
+- **Single Responsibility** — one agent, one well-defined task.
+- **Loose Coupling** — agents talk only through shared graph state, never directly.
+- **Immutable Outputs** — once an agent writes its section of state, no other agent may edit it.
+- **Deterministic Routing** — the graph only branches based on `critic_verdict`, nothing else.
+- **Explicit Contracts** — every node has a documented input/output boundary, so the pipeline stays easy to test and replace piece by piece.
+
+---
+
+## 2. Graph Flow
+
+The pipeline runs linearly through four stages, with one conditional loop:
+
+```
+START → Requirements → Tech Stack → Architecture → Critic
+                                          ▲            │
+                                          │            ├── APPROVE → Diagram → END
+                                          └── REVISE ───┘
+```
+
+**Key notes:**
+- The path from `Requirements` → `Tech Stack` → `Architecture` → `Critic` always runs in order — no stage can be skipped.
+- `Critic` is the only decision point in the graph. Its verdict determines whether the pipeline moves forward (to `Diagram`) or loops back (to `Architecture`).
+- The revision loop is bounded — it repeats until either `APPROVE` is returned or a maximum revision count is reached (preventing infinite loops).
+
+---
+
+## 3. Shared Graph State
+
+All agents read from and write to a single shared state object. No agent holds private state outside of this.
 
 ```python
-class DesignState(TypedDict):
-    problem_statement: str              # raw user input, set once at start
-    requirements: dict                  # output of Requirements Agent
-    techstack: dict                     # output of Tech Stack Agent
-    architecture: dict                  # output of Architecture Agent
-    critic_verdict: dict                # output of Critic Agent
-    revision_count: int                 # starts at 0, incremented on each REVISE loop
-    final_output: dict                  # assembled at the end, what gets returned to frontend
+GraphState
+├── problem_statement
+├── requirements
+├── techstack
+├── architecture
+├── critic_verdict
+├── diagram
+├── revision_count
+└── critic_history
 ```
+
+**Key notes:**
+- Every agent reads *only* the fields it needs — not the entire state blindly.
+- Every agent writes to *exactly one* field. No agent should write to two sections of state.
+- Think of this as a strict "read-your-inputs, write-your-output" contract per node.
 
 ---
 
-## 1. Requirements Agent (Person B)
+## 4. Agent Specifications
 
-**Input:** `problem_statement: str`
+### 4.1 Requirements Agent
 
-**Output:**
-```json
-{
-  "functional_requirements": ["string", "string"],
-  "non_functional_requirements": ["string", "string"],
-  "scale": "string, e.g. '10M daily active users'",
-  "constraints": ["string", "string"],
-  "assumptions": ["string", "string"]
-}
-```
+**Responsibility:** Translate the user's natural-language system design question into structured, unambiguous requirements. This is the foundation the rest of the pipeline builds on — if this agent gets it wrong, every downstream agent inherits the error.
 
-**Example:**
-Input: `"design a notification system for 10M users"`
-```json
-{
-  "functional_requirements": [
-    "send push, email, and SMS notifications",
-    "support scheduled and real-time notifications",
-    "allow users to set notification preferences"
-  ],
-  "non_functional_requirements": [
-    "low latency delivery (under 5s for real-time)",
-    "high availability (99.9%)"
-  ],
-  "scale": "10M users, assume ~500 notifications/sec peak",
-  "constraints": ["must support multiple providers (FCM, APNS, SMTP)"],
-  "assumptions": ["users have at most 3 registered devices"]
-}
-```
+| | |
+|---|---|
+| **Reads** | `problem_statement` |
+| **Writes** | `requirements` |
+| **Output type** | `RequirementsOutput` |
+
+**Output contains:**
+- Functional requirements
+- Non-functional requirements
+- Scale expectations
+- Constraints
+- Assumptions
+
+**Must not:**
+- Choose or suggest technologies
+- Design any part of the architecture
+- Estimate cost
+
+> **Key highlight:** This agent's *only* job is requirement extraction. If you catch it recommending a database or sketching components, that's a contract violation.
 
 ---
 
-## 2. Tech Stack Agent (Person B)
+### 4.2 Tech Stack Agent
 
-**Input:** `requirements: dict` (the object above)
+**Responsibility:** Recommend a technology stack that satisfies the requirements produced upstream — nothing more.
 
-**Output:**
-```json
-{
-  "stack": [
-    {
-      "component": "string, e.g. 'Message Queue'",
-      "choice": "string, e.g. 'Kafka'",
-      "justification": "string, 1-2 sentences"
-    }
-  ]
-}
-```
+| | |
+|---|---|
+| **Reads** | `requirements` |
+| **Writes** | `techstack` |
+| **Output type** | `TechStackOutput` |
 
-**Example:**
-```json
-{
-  "stack": [
-    {
-      "component": "Message Queue",
-      "choice": "Kafka",
-      "justification": "Handles high-throughput async delivery and decouples notification producers from senders."
-    },
-    {
-      "component": "Database",
-      "choice": "PostgreSQL + Redis",
-      "justification": "Postgres for durable preference storage, Redis for fast rate-limiting checks."
-    }
-  ]
-}
-```
+**Output contains:**
+- Frontend
+- Backend
+- Database
+- Cache
+- Queue
+- Storage
+- Deployment
+
+**Must not:**
+- Redefine or reinterpret requirements
+- Invent new features not present in requirements
+- Generate architecture or component design
+
+> **Key highlight:** This agent recommends *technology choices*, not *system design*. Architecture decisions belong strictly to the next agent.
 
 ---
 
-## 3. Architecture Agent (Person C)
+### 4.3 Architecture Agent
 
-**Input:** `requirements: dict`, `techstack: dict`, `revision_notes: list[str] | None` (passed in only on revision loops)
+**Responsibility:** Produce the component-level system architecture based on the requirements and tech stack. This is also the agent responsible for handling revisions when the Critic sends the design back.
 
-**Output:**
-```json
-{
-  "design_description": "string, 3-6 sentences explaining the overall design",
-  "components": [
-    {
-      "name": "string",
-      "responsibility": "string"
-    }
-  ],
-  "mermaid_diagram": "string, raw Mermaid syntax, e.g. 'graph TD\\nA[Client]-->B[API Gateway]\\nB-->C[Notification Service]'",
-  "tradeoffs": ["string", "string"]
-}
-```
+| | |
+|---|---|
+| **Reads** | `requirements`, `techstack`, `revision_notes` (optional), `revision_count` |
+| **Writes** | `architecture` |
+| **Output type** | `ArchitectureOutput` |
 
-**Example:**
-```json
-{
-  "design_description": "Clients send requests to an API Gateway, which publishes events to Kafka. A Notification Service consumes events and dispatches via provider-specific adapters.",
-  "components": [
-    {"name": "API Gateway", "responsibility": "auth + request routing"},
-    {"name": "Notification Service", "responsibility": "consumes events, applies user preferences, dispatches to providers"}
-  ],
-  "mermaid_diagram": "graph TD\nA[Client] --> B[API Gateway]\nB --> C[Kafka Queue]\nC --> D[Notification Service]\nD --> E[FCM/APNS/SMTP]",
-  "tradeoffs": ["Kafka adds operational complexity but is necessary at this scale"]
-}
-```
+**Output contains:**
+- Components
+- Component responsibilities
+- Data flow
+- `connects_to` mapping (used later for diagramming)
+- Design description
 
-**Important for Person A:** when `revision_notes` is non-empty, this same function is called again — output shape is identical, just (hopefully) improved.
+**Revision handling rules:**
+- If `revision_count == 0` → ignore `revision_notes` entirely (first pass, nothing to revise yet).
+- If `revision_count > 0` → `revision_notes` **must** be incorporated into the updated design.
+
+> **Key highlight:** This is the only agent that owns design decisions in the entire pipeline. Everything downstream (Critic, Diagram) treats its output as the design of record.
 
 ---
 
-## 4. Critic Agent (Person C)
+### 4.4 Critic Agent
 
-**Input:** `architecture: dict`
+**Responsibility:** Review the architecture for problems — and only review it. This agent is a gatekeeper, not a fixer.
 
-**Output:**
-```json
-{
-  "verdict": "APPROVE",
-  "issues": ["string", "string"]
-}
-```
-`verdict` is always exactly `"APPROVE"` or `"REVISE"` — Person A's conditional edge checks this string exactly, so don't deviate (no "approved", no lowercase, etc — agree on exact casing now).
+| | |
+|---|---|
+| **Reads** | `architecture` |
+| **Writes** | `critic_verdict` |
+| **Output type** | `CriticVerdict` |
 
-**Example (rejection case):**
-```json
-{
-  "verdict": "REVISE",
-  "issues": [
-    "No mention of how delivery failures/retries are handled",
-    "Single Notification Service instance is a single point of failure — no redundancy discussed"
-  ]
-}
-```
+**Output contains:**
+- `verdict` → either `APPROVE` or `REVISE`
+- `issues[]` → list of identified problems (empty if approved)
+
+**Must not:**
+- Fix or edit the architecture directly
+- Redesign any component
+- Silently approve without reviewing
+
+> **Key highlight:** The Critic identifies problems and hands them off — it never touches the design itself. The pipeline uses `verdict` alone to decide whether to route to `Diagram` or loop back to `Architecture`.
 
 ---
 
-## 5. RAG Retrieval Tool (Person D)
+### 4.5 Diagram Agent
 
-**Input:** `query: str`
+**Responsibility:** Visualize the final, approved architecture as a Mermaid diagram. This is a rendering step, not a design step.
 
-**Output:**
-```json
-{
-  "chunks": ["string", "string", "string"]
-}
-```
-Plain list of relevant text chunks — the calling agent (Architecture Agent, if you wire it in) inserts these into its own prompt as extra context.
+| | |
+|---|---|
+| **Reads** | `architecture` |
+| **Writes** | `diagram` |
+| **Output type** | `DiagramOutput` (contains `mermaid_diagram`) |
 
----
+**Generation strategy (in priority order):**
+1. **Preferred:** Build the diagram directly from `architecture.components` and their `connects_to` mappings.
+2. **Fallback:** If connection data is unavailable, fall back to an LLM-based diagram generation pass.
 
-## 6. Web Search Tool (Person D)
+**Must not:**
+- Invent architecture that wasn't in the approved design
+- Add components not present in `architecture.components`
 
-**Input:** `query: str`
-
-**Output:**
-```json
-{
-  "results": [
-    {"title": "string", "snippet": "string", "url": "string"}
-  ]
-}
-```
+> **Key highlight:** This agent visualizes existing architecture — it never designs. Anything it draws should be traceable back to the Architecture Agent's output.
 
 ---
 
-## 7. Final Output (assembled by Person A in `graph.py`, sent to frontend)
+## 5. Revision Loop Contract
 
-```json
-{
-  "requirements": { ... },
-  "techstack": { ... },
-  "architecture": { ... },
-  "critic_history": [ { "verdict": "...", "issues": [...] } ],
-  "revision_count": 1
-}
-```
+When the Critic returns `REVISE`, the pipeline follows a fixed sequence:
 
-This is the exact JSON Person D's frontend will receive from `POST /design` — build the frontend against this shape using mock data before the backend is ready.
+1. Critic returns `REVISE`
+2. Pipeline increments `revision_count += 1`
+3. Pipeline passes `critic.issues` forward as `revision_notes`
+4. Architecture Agent regenerates the design, incorporating the notes
+5. Critic reviews the new architecture
+6. Repeat steps 1–5 until `APPROVE` **or** the maximum revision count is reached
+
+**Key notes:**
+- `revision_count` is the single source of truth for how many loops have occurred — no agent should track this independently.
+- The loop must terminate deterministically (either by approval or by hitting the cap) to avoid runaway execution.
 
 ---
 
-## Non-negotiable rules
+## 6. Ownership Matrix
 
-1. Field names are exact — `functional_requirements`, not `functionalRequirements` or `func_reqs`. Python convention (snake_case) throughout, including in the JSON the frontend receives.
-2. Every agent function must `pydantic`-validate its own output before returning, so a malformed LLM response fails loudly in that person's own testing — not three days later in integration.
-3. If you need to change a shape, edit this file in a PR and post in the group chat — don't just change it locally.
+| Node | Reads | Writes |
+|---|---|---|
+| **Requirements** | `problem_statement` | `requirements` |
+| **Tech Stack** | `requirements` | `techstack` |
+| **Architecture** | `requirements`, `techstack`, `revision_notes` | `architecture` |
+| **Critic** | `architecture` | `critic_verdict` |
+| **Diagram** | `architecture` | `diagram` |
+
+**Quick-reference rule of thumb:** if a node isn't listed as the writer of a field in this table, it should never be modifying that field — full stop.
+
+---
+
+## 7. Design Principles Recap
+
+1. **Single Responsibility** — each agent performs one well-defined task, nothing adjacent.
+2. **Loose Coupling** — agents communicate only through shared graph state, never through direct calls to one another.
+3. **Immutable Outputs** — once an agent produces its output, it is treated as final and untouchable by others.
+4. **Deterministic Routing** — all graph transitions are driven solely by `critic_verdict`.
+5. **Explicit Contracts** — every node's required inputs and guaranteed outputs are documented, keeping the pipeline easy to extend, test, and swap out piece by piece.

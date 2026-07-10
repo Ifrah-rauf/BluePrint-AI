@@ -5,7 +5,7 @@ import sys
 import json
 
 
-def run(
+def arch_run(
     requirements: dict,
     techstack: dict,
     revision_notes: list | None = None,
@@ -57,7 +57,7 @@ if __name__ == "__main__":
     try:
         requirements = requirements_run(problem)
         techstack = techstack_run(requirements)
-        output = run(requirements=requirements, techstack=techstack, revision_count=0)
+        output = arch_run(requirements=requirements, techstack=techstack, revision_count=0)
         print(json.dumps(output, indent=4))
     except RuntimeError as e:
         print(e)
