@@ -1,4 +1,4 @@
-from state import TechStackOutput
+from state import TechStackOutput, DesignState
 from llm_client import call_llm
 from prompts import TECHSTACK_PROMPT
 import sys
@@ -25,6 +25,23 @@ def tech_run(requirements: dict) -> dict:
         raise RuntimeError(
             f"Tech Stack Agent failed: {e}"
         ) from e
+        
+def techstack_node(state: DesignState) -> dict:
+    """
+    LangGraph wrapper for the Tech Stack Agent.
+
+    Reads:
+        state["requirements"]
+
+    Writes:
+        state["techstack"]
+    """
+    techstack = tech_run(state["requirements"])
+
+    return {
+        "techstack": techstack
+    }
+
 #test block
 if __name__ == "__main__":
     sample_requirements = {

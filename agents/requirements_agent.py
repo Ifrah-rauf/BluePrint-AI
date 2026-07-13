@@ -1,4 +1,4 @@
-from state import RequirementsOutput
+from state import RequirementsOutput, DesignState
 from llm_client import call_llm
 from prompts import REQUIREMENTS_PROMPT
 import sys
@@ -25,6 +25,23 @@ def req_run(problem_statement: str) -> dict:
         raise RuntimeError(
             f"Requirements Agent failed: {e}"
         ) from e
+
+def requirements_node(state: DesignState) -> dict:
+    """
+    LangGraph wrapper for the Requirements Agent.
+
+    Reads:
+        state["problem_statement"]
+
+    Writes:
+        state["requirements"]
+    """
+    requirements = req_run(state["problem_statement"])
+
+    return {
+        "requirements": requirements
+    }
+
 #test block
 if __name__ == "__main__":
     # 1. Setting the default fallback text
