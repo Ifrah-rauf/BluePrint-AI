@@ -21,7 +21,7 @@ def critic_run(architecture: dict) -> dict:
     try:
         response = call_llm(CRITIC_PROMPT, architecture)
 
-        # enforce exact casing — pipeline.py conditional check depends on this
+        # enforce exact casing — graph.py conditional edge depends on this
         response["verdict"] = response["verdict"].strip().upper()
         if response["verdict"] not in ("APPROVE", "REVISE"):
             response["verdict"] = "REVISE"
@@ -32,10 +32,23 @@ def critic_run(architecture: dict) -> dict:
         raise RuntimeError(f"Critic Agent failed: {e}") from e
 
 
+def critic_node(state: dict) -> dict:
+    """
+    LangGraph node wrapper for critic_run.
+    Reads from GraphState, calls critic_run, returns only the state keys it owns.
+    """
+    output = critic_run(architecture=state["architecture"])
+    return {
+        "critic_verdict": output,
+        "critic_history": state.get("critic_history", []) + [output],
+        "revision_count": state.get("revision_count", 0) + 1,
+    }
+
+
 if __name__ == "__main__":
-    from agents.requirements_agent import run as requirements_run
-    from agents.techstack_agent import run as techstack_run
-    from agents.architecture_agent import run as architecture_run
+    from agents.requirements_agent import req_run
+    from agents.techstack_agent import tech_run
+    from agents.architecture_agent import arch_run
 
     problem = "Design a scalable notification system for 10 million users."
 
@@ -47,9 +60,9 @@ if __name__ == "__main__":
             problem = sys.argv[2]
 
     try:
-        requirements = requirements_run(problem)
-        techstack = techstack_run(requirements)
-        architecture = architecture_run(requirements=requirements, techstack=techstack, revision_count=0)
+        requirements = req_run(problem)
+        techstack = tech_run(requirements)
+        architecture = arch_run(requirements=requirements, techstack=techstack, revision_count=0)
         output = critic_run(architecture=architecture)
         print(json.dumps(output, indent=4))
     except RuntimeError as e:

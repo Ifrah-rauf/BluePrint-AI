@@ -65,11 +65,20 @@ def diagram_run(architecture: dict) -> dict:
         raise RuntimeError(f"Diagram Agent failed: {e}") from e
 
 
+def diagram_node(state: dict) -> dict:
+    """
+    LangGraph node wrapper for diagram_run.
+    Reads from GraphState, calls diagram_run, returns only the state key it owns.
+    """
+    output = diagram_run(architecture=state["architecture"])
+    return {"diagram": output}
+
+
 if __name__ == "__main__":
-    from agents.requirements_agent import run as requirements_run
-    from agents.techstack_agent import run as techstack_run
-    from agents.architecture_agent import run as architecture_run
-    from agents.critic_agent import run as critic_run
+    from agents.requirements_agent import req_run
+    from agents.techstack_agent import tech_run
+    from agents.architecture_agent import arch_run
+    from agents.critic_agent import critic_run
 
     problem = "Design a scalable notification system for 10 million users."
 
@@ -81,13 +90,13 @@ if __name__ == "__main__":
             problem = sys.argv[2]
 
     try:
-        requirements = requirements_run(problem)
-        techstack = techstack_run(requirements)
-        architecture = architecture_run(requirements=requirements, techstack=techstack, revision_count=0)
+        requirements = req_run(problem)
+        techstack = tech_run(requirements)
+        architecture = arch_run(requirements=requirements, techstack=techstack, revision_count=0)
         critic_output = critic_run(architecture=architecture)
 
         if critic_output["verdict"] == "REVISE":
-            architecture = architecture_run(
+            architecture = arch_run(
                 requirements=requirements,
                 techstack=techstack,
                 revision_notes=critic_output["issues"],
