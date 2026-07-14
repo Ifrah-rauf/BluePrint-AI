@@ -23,6 +23,7 @@ def critic_run(architecture: dict) -> dict:
 
         # enforce exact casing — graph.py conditional edge depends on this
         response["verdict"] = response["verdict"].strip().upper()
+        # response["verdict"] = "REVISE"
         if response["verdict"] not in ("APPROVE", "REVISE"):
             response["verdict"] = "REVISE"
 

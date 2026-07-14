@@ -1,0 +1,22 @@
+Design a production-grade distributed Version Control System similar to GitHub.
+
+Requirements:
+
+- Support 100 million repositories.
+- Support 10 million daily active developers.
+- Allow concurrent commits from multiple contributors.
+- Support branching, merging, rebasing, pull requests, code reviews, and repository forking.
+- Store complete commit history efficiently.
+- Support repositories larger than 50 GB.
+- Provide near real-time search across all repositories.
+- Support role-based access control for organizations and private repositories.
+- Generate webhooks for repository events.
+- Support Git over HTTPS and SSH.
+- Handle large binary files efficiently.
+- Provide high availability across multiple regions.
+- Ensure no commit is lost during failures.
+- Repository cloning should remain performant even for very large repositories.
+- The system should tolerate regional outages.
+- Minimize storage costs using deduplication where appropriate.
+
+The design should be production-ready and explicitly justify every major architectural decision.
