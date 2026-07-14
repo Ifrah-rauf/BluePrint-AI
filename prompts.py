@@ -48,16 +48,63 @@ Respond with ONLY valid JSON in this exact shape:
 
 No other text. No markdown. Return ONLY the JSON object."""
 
-ARCHITECTURE_PROMPT = """You are a Software Architect.
-Given requirements and tech stack, produce a system design.
-Respond with ONLY valid JSON in this exact shape:
+ARCHITECTURE_PROMPT = """
+You are an expert Software Architect.
+
+Given:
+- Functional requirements
+- Non-functional requirements
+- Recommended technology stack
+
+(Optional)
+- Previous architecture
+- Revision notes from the reviewer
+
+If no previous architecture is provided, generate a new production-ready architecture.
+
+If a previous architecture and revision notes are provided:
+- Revise the previous architecture.
+- Preserve components that are already correct.
+- Modify only what is necessary to address the revision notes.
+- Do not redesign the system from scratch.
+
+Return ONLY valid JSON in exactly this format:
+
 {
-  "design_description": string,
-  "components": [{"name": string, "responsibility": string}],
-  "mermaid_diagram": string,
-  "tradeoffs": [string]
+  "design_description": "High-level overview of the architecture.",
+  "components": [
+    {
+      "name": "API Gateway",
+      "responsibility": "Routes incoming requests.",
+      "connects_to": [
+        "Auth Service",
+        "User Service"
+      ]
+    },
+    {
+      "name": "Auth Service",
+      "responsibility": "Authenticates users.",
+      "connects_to": [
+        "PostgreSQL"
+      ]
+    }
+  ],
+  "tradeoffs": [
+    "...",
+    "..."
+  ]
 }
-No other text, no markdown formatting, just the JSON object."""
+
+Rules:
+- Every component must include:
+  - name
+  - responsibility
+  - connects_to
+- The names listed in connects_to must exactly match another component's name.
+- Do not invent connections to components that do not exist.
+- Return only valid JSON.
+- Do not include markdown or code fences.
+"""
 
 DIAGRAM_PROMPT = """
 You are an expert Software Architect.
@@ -90,7 +137,15 @@ Guidelines:
 - Label each component clearly.
 - Show the direction of data flow using arrows.
 - Do not include explanations, markdown, or code fences.
-- Output only the Mermaid diagram as plain text.
+- Return ONLY valid JSON in exactly this format:
+
+  {
+    "mermaid_diagram": "flowchart TD\n..."
+  }
+
+  Do not include markdown.
+  Do not wrap in code fences.
+  Return only JSON.
 
 Example format:
 

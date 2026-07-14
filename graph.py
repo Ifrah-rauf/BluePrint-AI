@@ -1,40 +1,53 @@
 import os
 from IPython.display import Image, display
 from langgraph.graph import StateGraph, START, END
-from agents.requirements_agent import req_run
-from agents.techstack_agent import tech_run
-from agents.architecture_agent import arch_run
-from agents.diagram_agent import diagram_run
-from agents.critic_agent import critic_run
+from agents.requirements_agent import requirements_node
+from agents.techstack_agent import techstack_node
+from agents.architecture_agent import architecture_node
+from agents.diagram_agent import diagram_node
+from agents.critic_agent import critic_node
 import subprocess
 
-from state import RequirementsOutput, TechStackOutput, ArchitectureOutput, DiagramOutput, CriticVerdict
+from state import DesignState
 from typing import TypedDict
 
-class GraphState(TypedDict):
-    problem_statement: str
-    requirements: RequirementsOutput | None
-    techstack: TechStackOutput | None
-    architecture: ArchitectureOutput | None
-    diagram: DiagramOutput | None
-    critic_verdict: CriticVerdict | None
-    critic_history: list[CriticVerdict] 
-    revision_count: int
+graph = StateGraph(DesignState)
 
+MAX_REVISIONS=3
+def route_after_critic(state):
+    print("Verdict:", state["critic_verdict"]["verdict"])
+    print("Revision count:", state["revision_count"])
 
-graph = StateGraph(GraphState)
+    if (
+        state["critic_verdict"]["verdict"] == "REVISE"
+        and state["revision_count"] < MAX_REVISIONS
+    ):
+        print("→ Routing to architecture")
+        return "architecture"
 
-graph.add_node("requirements", req_run)
-graph.add_node("techstack", tech_run)
-graph.add_node("architecture", arch_run)
-graph.add_node("diagram", diagram_run)
-graph.add_node("critic", critic_run)    
+    print("→ Routing to diagram")
+    return "diagram"
 
+#individual nodes corresponding to graphstate intially set null state
+graph.add_node("requirements", requirements_node)
+graph.add_node("techstack", techstack_node)
+graph.add_node("architecture", architecture_node)
+graph.add_node("diagram", diagram_node)
+graph.add_node("critic", critic_node)    
+
+#conncetion between nodes (startnode->endnode)
 graph.add_edge(START, "requirements")
 graph.add_edge("requirements", "techstack")
 graph.add_edge("techstack", "architecture")
 graph.add_edge("architecture", "critic")
-graph.add_edge("critic", "diagram")
+graph.add_conditional_edges(
+    "critic", #our startnode
+    route_after_critic, #function defining condition
+    {
+        "architecture": "architecture", #run architecture (revision)
+        "diagram": "diagram", #run diagram if no revision
+    },
+)
 graph.add_edge("diagram", END)
 
 compiled_graph=graph.compile()

@@ -4,16 +4,26 @@ from prompts import ARCHITECTURE_PROMPT
 import sys
 import json
 
-
 def arch_run(
+    
     requirements: dict,
     techstack: dict,
+    previous_architecture=None,
     revision_notes: list | None = None,
     revision_count: int = 0,
 ) -> dict:
     """
     Produces a component-level architecture from requirements and tech stack.
-    On revision loops, accepts revision_notes from the Critic Agent.
+    If previous_architecture is null:
+    Generate a fresh architecture.
+    Otherwise:
+    Modify only the parts necessary to resolve the issues.
+    Preserve all correct design decisions.
+    Do not redesign the system from scratch.
+    On revision loops, accepts revision_notes from the Critic Agent. If revision notes are provided,
+    they override previous architectural decisions.
+    Do not regenerate the first draft. Modify the previous design to resolve the review issues while 
+    preserving everything that is already correct.
 
     Args:
         requirements (dict): Output from Requirements Agent.
@@ -52,8 +62,14 @@ def architecture_node(state: dict) -> dict:
     output = arch_run(
         requirements=state["requirements"],
         techstack=state["techstack"],
-        revision_notes=revision_notes,
-        revision_count=state.get("revision_count", 0),
+        previous_architecture=state.get("architecture"),
+        #on first run returns none, after that it returns the architecture from the previous iteration.
+        revision_notes=(
+            state["critic_verdict"]["issues"]
+            if state.get("critic_verdict")
+            else None
+        ),
+    revision_count=state["revision_count"],
     )
     return {"architecture": output}
 

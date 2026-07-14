@@ -28,6 +28,7 @@ class TechStackOutput(BaseModel):
 class ArchitectureComponent(BaseModel):
     name: str
     responsibility: str
+    connects_to: list[str] = Field(default_factory=list)
 
 # UPDATED---------------------------------
 class ArchitectureOutput(BaseModel):
@@ -62,5 +63,5 @@ class DesignState(TypedDict):
     critic_verdict: NotRequired[dict]
     critic_history: Annotated[list[dict], operator.add]
     revision_count: int
-    mermaid: NotRequired[dict]               # NEW — output of the diagram-only step, runs once after critic approves
+    diagram: NotRequired[dict]              # NEW — output of the diagram-only step, runs once after critic approves
     final_output: NotRequired[dict]

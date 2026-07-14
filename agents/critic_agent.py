@@ -38,10 +38,15 @@ def critic_node(state: dict) -> dict:
     Reads from GraphState, calls critic_run, returns only the state keys it owns.
     """
     output = critic_run(architecture=state["architecture"])
+    revision_count = state.get("revision_count", 0)
+
+    if output["verdict"] == "REVISE":
+        revision_count += 1 #only incrementing on revision. not everytime
+
     return {
         "critic_verdict": output,
         "critic_history": state.get("critic_history", []) + [output],
-        "revision_count": state.get("revision_count", 0) + 1,
+        "revision_count": revision_count,
     }
 
 

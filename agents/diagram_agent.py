@@ -9,6 +9,7 @@ def _build_mermaid_from_connects_to(components: list[dict]) -> str | None:
     """
     Deterministic Mermaid generation directly from connects_to — no LLM call needed.
     Returns None if connects_to is empty for all components (triggers LLM fallback).
+    
     """
     id_map = {}
     for i, comp in enumerate(components):
@@ -54,11 +55,13 @@ def diagram_run(architecture: dict) -> dict:
 
         if mermaid:
             explanation = architecture.get("design_description", "")[:120]
-            response = {"mermaid": mermaid, "explanation": explanation}
+            response = {"mermaid_diagram": mermaid}
+            # response = {"mermaid_diagram": mermaid}
         else:
             print("[diagram_agent] connects_to missing — falling back to LLM")
             response = call_llm(DIAGRAM_PROMPT, architecture)
 
+        print("Diagram response:", response)
         validated = DiagramOutput.model_validate(response)
         return validated.model_dump()
     except Exception as e:
@@ -70,6 +73,7 @@ def diagram_node(state: dict) -> dict:
     LangGraph node wrapper for diagram_run.
     Reads from GraphState, calls diagram_run, returns only the state key it owns.
     """
+    print("Diagram node executed")
     output = diagram_run(architecture=state["architecture"])
     return {"diagram": output}
 
@@ -106,7 +110,7 @@ if __name__ == "__main__":
         output = diagram_run(architecture=architecture)
         print(json.dumps(output, indent=4))
         print("\n--- paste into mermaid.live ---\n")
-        print(output["mermaid"])
+        print(output["mermaid_diagram"])
     except RuntimeError as e:
         print(e)
         sys.exit(1)
