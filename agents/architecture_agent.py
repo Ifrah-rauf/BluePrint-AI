@@ -19,7 +19,7 @@ def arch_run(
         requirements (dict): Output from Requirements Agent.
         techstack (dict): Output from Tech Stack Agent.
         revision_notes (list | None): Issues from Critic Agent, passed only on revision loops.
-        revision_count (int): Owned by pipeline.py — passed through unchanged.
+        revision_count (int): Owned by LangGraph state — passed through unchanged.
 
     Returns:
         dict: Validated architecture dictionary.
@@ -41,9 +41,26 @@ def arch_run(
         raise RuntimeError(f"Architecture Agent failed: {e}") from e
 
 
+def architecture_node(state: dict) -> dict:
+    """
+    LangGraph node wrapper for arch_run.
+    Reads from GraphState, calls arch_run, returns only the state key it owns.
+    """
+    critic_verdict = state.get("critic_verdict")
+    revision_notes = critic_verdict.get("issues") if critic_verdict else None
+
+    output = arch_run(
+        requirements=state["requirements"],
+        techstack=state["techstack"],
+        revision_notes=revision_notes,
+        revision_count=state.get("revision_count", 0),
+    )
+    return {"architecture": output}
+
+
 if __name__ == "__main__":
-    from agents.requirements_agent import run as requirements_run
-    from agents.techstack_agent import run as techstack_run
+    from agents.requirements_agent import req_run
+    from agents.techstack_agent import tech_run
 
     problem = "Design a scalable notification system for 10 million users."
 
@@ -55,8 +72,8 @@ if __name__ == "__main__":
             problem = sys.argv[2]
 
     try:
-        requirements = requirements_run(problem)
-        techstack = techstack_run(requirements)
+        requirements = req_run(problem)
+        techstack = tech_run(requirements)
         output = arch_run(requirements=requirements, techstack=techstack, revision_count=0)
         print(json.dumps(output, indent=4))
     except RuntimeError as e:
