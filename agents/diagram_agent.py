@@ -1,16 +1,24 @@
 from state import DiagramOutput
-from llm_client import call_llm
-from prompts import DIAGRAM_PROMPT
+
 import sys
 import json
 
 
-def _build_mermaid_from_connects_to(components: list[dict]) -> str | None:
+def _build_mermaid_from_depends_on(components: list[dict]) -> str:
     """
-    Deterministic Mermaid generation directly from connects_to — no LLM call needed.
-    Returns None if connects_to is empty for all components (triggers LLM fallback).
-    
+    Fully deterministic Mermaid generation from depends_on.
+    No LLM involved — Architecture Agent owns the topology, this just renders it.
+
+    depends_on means: this component initiates requests TO these components.
+    Edges are always: this --> dependency (never reverse).
+    Standalone components (empty depends_on) are rendered as isolated nodes.
+
+    Raises:
+        RuntimeError: If components list is empty.
     """
+    if not components:
+        raise RuntimeError("Diagram Agent failed: components list is empty.")
+
     id_map = {}
     for i, comp in enumerate(components):
         words = comp["name"].replace("(", "").replace(")", "").split()
@@ -21,49 +29,54 @@ def _build_mermaid_from_connects_to(components: list[dict]) -> str | None:
 
     lines = ["graph TD"]
     seen_edges = set()
+    seen_nodes = set()  # tracks which nodes already appear in an edge line
 
     for comp in components:
         src_id = id_map[comp["name"]]
-        for target_name in comp.get("connects_to", []):
+        for target_name in comp.get("depends_on", []):
             if target_name in id_map:
                 tgt_id = id_map[target_name]
                 edge = f"    {src_id}[{comp['name']}] --> {tgt_id}[{target_name}]"
                 if edge not in seen_edges:
                     lines.append(edge)
                     seen_edges.add(edge)
+                    seen_nodes.add(comp["name"])
+                    seen_nodes.add(target_name)
 
-    return "\n".join(lines) if len(lines) > 1 else None
+    # render standalone components that had no edges
+    for comp in components:
+        if comp["name"] not in seen_nodes:
+            node_id = id_map[comp["name"]]
+            lines.append(f"    {node_id}[{comp['name']}]")
+
+    return "\n".join(lines)
 
 
 def diagram_run(architecture: dict) -> dict:
     """
-    Generates a Mermaid diagram from an approved architecture.
-    Uses connects_to for deterministic generation — falls back to LLM if missing.
+    Generates a Mermaid diagram deterministically from approved architecture.
+    Architecture Agent owns the topology via depends_on — this agent only renders it.
+    No LLM call — no hallucinations, no invalid diagrams, same output every run.
 
     Args:
         architecture (dict): Approved output from Architecture Agent.
+                             Components must have depends_on populated.
 
     Returns:
-        dict: Validated diagram output with mermaid string and explanation.
+        dict: Validated diagram output with mermaid_diagram string.
 
     Raises:
-        RuntimeError: If the LLM call or validation fails.
+        RuntimeError: If components is empty or diagram generation fails.
     """
     try:
         components = architecture.get("components", [])
-        mermaid = _build_mermaid_from_connects_to(components)
-
-        if mermaid:
-            explanation = architecture.get("design_description", "")[:120]
-            response = {"mermaid_diagram": mermaid}
-            # response = {"mermaid_diagram": mermaid}
-        else:
-            print("[diagram_agent] connects_to missing — falling back to LLM")
-            response = call_llm(DIAGRAM_PROMPT, architecture)
-
+        mermaid = _build_mermaid_from_depends_on(components)
+        response = {"mermaid_diagram": mermaid}
         print("Diagram response:", response)
         validated = DiagramOutput.model_validate(response)
         return validated.model_dump()
+    except RuntimeError:
+        raise
     except Exception as e:
         raise RuntimeError(f"Diagram Agent failed: {e}") from e
 
