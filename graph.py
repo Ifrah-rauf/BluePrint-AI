@@ -52,10 +52,14 @@ graph.add_edge("diagram", END)
 
 compiled_graph=graph.compile()
 
-
 def generate_design(problem_statement: str):
-    return compiled_graph.invoke({
+    result = compiled_graph.invoke({
         "problem_statement": problem_statement,
         "critic_history": [],
         "revision_count": 0,
     })
+    print(result.keys())
+    print(result["diagram"])
+    return result
+
+generate_design("notes app")

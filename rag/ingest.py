@@ -11,13 +11,13 @@ load_dotenv(dotenv_path=str(env_path))
 
 # 2. Extract your exact environment variables
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")  # Using your exact key name here!
+SUPABASE_SERVICE_ROLE = os.getenv("SUPABASE_SERVICE_ROLE")  # Using your exact key name here!
 
-if not SUPABASE_URL or not SUPABASE_KEY:
-    raise ValueError("❌ Error: SUPABASE_URL or SUPABASE_KEY is missing from your .env file.")
+if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE:
+    raise ValueError("❌ Error: SUPABASE_URL or SUPABASE_SERVICE_ROLE is missing from your .env file.")
 
 # 3. Initialize the Supabase Client connection
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE)
 
 # 4. Load the Hugging Face Model locally on your machine
 print("🔄 Loading local Hugging Face all-MiniLM-L6-v2 model...")

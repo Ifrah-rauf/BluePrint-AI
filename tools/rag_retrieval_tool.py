@@ -6,11 +6,11 @@ from supabase import create_client
 load_dotenv()
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+SUPABASE_SERVICE_ROLE = os.getenv("SUPABASE_SERVICE_ROLE")
 
 # Create connection instance if variables exist
-if SUPABASE_URL and SUPABASE_KEY:
-    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+if SUPABASE_URL and SUPABASE_SERVICE_ROLE:
+    supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE)
 else:
     supabase = None
 

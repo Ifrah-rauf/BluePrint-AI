@@ -10,9 +10,9 @@ env_path = root_dir / ".env"
 load_dotenv(dotenv_path=str(env_path))
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+SUPABASE_SERVICE_ROLE = os.getenv("SUPABASE_SERVICE_ROLE")
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE)
 
 # 2. Load the exact same local model we used for ingestion
 print("🔄 Loading local embedding model for querying...")
