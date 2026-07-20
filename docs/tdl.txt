@@ -1,0 +1,4 @@
+allow streaming
+multiple inputs and context window
+RAG is owrking or not?
+removing static content. 

@@ -1,10 +1,17 @@
 from state import TechStackOutput, DesignState
 from llm_client import call_llm
 from prompts import TECHSTACK_PROMPT
+from rag.query import build_combined_rag_context
 import sys
 import json
 #run fuction
-def tech_run(requirements: dict) -> dict:
+def tech_run(
+    requirements: dict,
+    collection: str | None = "system_design",
+    user_id: str | None = None,
+    profile_id: int | None = None,
+    session_id: str | None = None,
+) -> dict:
     """
     Recommend a technology stack based on structured requirements.
     Args:
@@ -15,9 +22,18 @@ def tech_run(requirements: dict) -> dict:
         RuntimeError: If the LLM call or validation fails.
     """
     try:
+        rag_context = build_combined_rag_context(
+            user_query=json.dumps(requirements, ensure_ascii=False),
+            user_id=user_id,
+            profile_id=profile_id,
+            session_id=session_id,
+        )
         response = call_llm(
             TECHSTACK_PROMPT,
-            requirements,
+            {
+                "requirements": requirements,
+                "rag_context": rag_context,
+            },
         )
         validated = TechStackOutput.model_validate(response)
         return validated.model_dump()
@@ -36,7 +52,12 @@ def techstack_node(state: DesignState) -> dict:
     Writes:
         state["techstack"]
     """
-    techstack = tech_run(state["requirements"])
+    techstack = tech_run(
+        state["requirements"],
+        user_id=state.get("user_id"),
+        profile_id=state.get("profile_id"),
+        session_id=state.get("session_id"),
+    )
 
     return {
         "techstack": techstack

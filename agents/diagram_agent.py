@@ -4,54 +4,80 @@ import sys
 import json
 
 
+def _sanitize_mermaid_label(text: str) -> str:
+    return (
+        text.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", " ")
+        .strip()
+    )
+
+
 def _build_mermaid_from_depends_on(components: list[dict]) -> str:
-    """
-    Fully deterministic Mermaid generation from depends_on.
-    No LLM involved — Architecture Agent owns the topology, this just renders it.
-
-    depends_on means: this component initiates requests TO these components.
-    Edges are always: this --> dependency (never reverse).
-    Standalone components (empty depends_on) are rendered as isolated nodes.
-
-    Raises:
-        RuntimeError: If components list is empty.
-    """
     if not components:
         raise RuntimeError("Diagram Agent failed: components list is empty.")
 
+    # 1. Standardize component tracking mapping dictionaries
     id_map = {}
+    normalized_components = []
+    
     for i, comp in enumerate(components):
-        words = comp["name"].replace("(", "").replace(")", "").split()
-        short_id = "".join(w[0] for w in words).upper()[:6]
-        if short_id in id_map.values():
-            short_id = short_id + str(i)
-        id_map[comp["name"]] = short_id
+        name = comp.get("name", "").strip()
+        if not name:
+            continue
+        # Use stable numeric IDs to avoid Mermaid parsing issues caused by
+        # repeated initials or punctuation in component names.
+        node_id = f"N{i + 1}"
+        id_map[name] = node_id
+        normalized_components.append(comp)
 
-    lines = ["graph TD"]
+    lines = ["flowchart TD"]
     seen_edges = set()
-    seen_nodes = set()  # tracks which nodes already appear in an edge line
+    seen_nodes = set()
 
-    for comp in components:
-        src_id = id_map[comp["name"]]
-        for target_name in comp.get("depends_on", []):
-            if target_name in id_map:
-                tgt_id = id_map[target_name]
-                edge = f"    {src_id}[{comp['name']}] --> {tgt_id}[{target_name}]"
+    # 2. Extract edge configurations and fall back to sequential links if dependencies are missing
+    for comp in normalized_components:
+        src_name = comp["name"]
+        src_id = id_map[src_name]
+        # ArchitectureOutput uses `connects_to`; keep `depends_on` as a fallback
+        # so older payloads still render.
+        dependencies = comp.get("connects_to", comp.get("depends_on", []))
+        
+        for tgt_raw in dependencies:
+            tgt_name = tgt_raw.strip()
+            if tgt_name in id_map:
+                tgt_id = id_map[tgt_name]
+                clean_src = _sanitize_mermaid_label(src_name)
+                clean_tgt = _sanitize_mermaid_label(tgt_name)
+
+                edge = f'    {src_id}["{clean_src}"] --> {tgt_id}["{clean_tgt}"]'
                 if edge not in seen_edges:
                     lines.append(edge)
                     seen_edges.add(edge)
-                    seen_nodes.add(comp["name"])
-                    seen_nodes.add(target_name)
+                    seen_nodes.add(src_name)
+                    seen_nodes.add(tgt_name)
 
-    # render standalone components that had no edges
-    for comp in components:
-        if comp["name"] not in seen_nodes:
-            node_id = id_map[comp["name"]]
-            lines.append(f"    {node_id}[{comp['name']}]")
+    # 🔄 FALLBACK TOPOLOGY: If no edges were discovered, build a clean structural chain flow
+    if len(seen_edges) == 0 and len(normalized_components) > 1:
+        for i in range(len(normalized_components) - 1):
+            c1, c2 = normalized_components[i]["name"], normalized_components[i+1]["name"]
+            id1, id2 = id_map[c1], id_map[c2]
+            clean1 = _sanitize_mermaid_label(c1)
+            clean2 = _sanitize_mermaid_label(c2)
+            lines.append(f'    {id1}["{clean1}"] --> {id2}["{clean2}"]')
+            seen_nodes.add(c1)
+            seen_nodes.add(c2)
+
+    # Render remaining isolated parts so components still appear even if they have
+    # no outgoing connections.
+    for comp in normalized_components:
+        name = comp["name"]
+        if name not in seen_nodes:
+            node_id = id_map[name]
+            clean_name = _sanitize_mermaid_label(name)
+            lines.append(f'    {node_id}["{clean_name}"]')
 
     return "\n".join(lines)
-
-
 def diagram_run(architecture: dict) -> dict:
     """
     Generates a Mermaid diagram deterministically from approved architecture.

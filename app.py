@@ -9,9 +9,77 @@ st.set_page_config(page_title="BluePrint-AI Workplace", layout="wide", initial_s
 
 # 2. Import regular libraries
 from tools.diagram_renderer import render_mermaid_chart
-from rag.query import search_relevant_docs
+from rag.query import fetch_attached_documents, search_relevant_docs
+from rag.ingest import ingest_uploaded_files
+from rag.core import STATIC_USER_ID, STATIC_PROFILE_ID  # static uid
 from graph import generate_design
 from state import DesignState
+from uuid import uuid4
+
+
+def _empty_design_result() -> dict:
+    return {
+        "problem_statement": "",
+        "requirements": None,
+        "techstack": None,
+        "architecture": None,
+        "diagram": None,
+        "critic_verdict": None,
+        "critic_history": [],
+        "revision_count": 0,
+    }
+
+
+def _looks_like_document_lookup(user_input: str) -> bool:
+    text = user_input.lower()
+    lookup_actions = (
+        "look up",
+        "lookup",
+        "search",
+        "find",
+        "retrieve",
+        "show",
+        "summarize",
+        "summarise",
+        "list",
+        "read",
+        "inspect",
+    )
+    lookup_targets = (
+        "document",
+        "documents",
+        "file",
+        "files",
+        "attachment",
+        "attachments",
+        "upload",
+        "uploads",
+        "pdf",
+        "notes",
+        "note",
+        "chunk",
+        "chunks",
+        "context",
+    )
+    design_signals = (
+        "architecture",
+        "architectural",
+        "system design",
+        "design blueprint",
+        "tech stack",
+        "scalable",
+        "service",
+        "services",
+        "database",
+        "api",
+        "gateway",
+    )
+
+    action_hits = sum(1 for term in lookup_actions if term in text)
+    target_hits = sum(1 for term in lookup_targets if term in text)
+    design_hits = sum(1 for term in design_signals if term in text)
+
+    return action_hits > 0 and target_hits > 0 and design_hits == 0
 
 # 3. Premium Styling & Fine-tuned Font Sizes
 st.markdown("""
@@ -117,10 +185,118 @@ header[data-testid="stHeader"], [data-testid="stToolbar"], #MainMenu {
 """, unsafe_allow_html=True)
 
 # --- SIDEBAR LAYOUT (Left Side Panel) ---
+if "result" not in st.session_state:
+    st.session_state.result = _empty_design_result()
+
+if "lookup_result" not in st.session_state:
+    st.session_state.lookup_result = None
+
+if "uploaded_files" not in st.session_state:
+    st.session_state.uploaded_files = []
+
+if "upload_widget_key" not in st.session_state:
+    st.session_state.upload_widget_key = 0
+
+if "session_id" not in st.session_state:
+    st.session_state.session_id = str(uuid4())
+
+attachment_lookup_error = None
+try:
+    attached_documents = fetch_attached_documents(
+        STATIC_USER_ID,  # static uid
+        STATIC_PROFILE_ID,
+    )
+except Exception as e:
+    attached_documents = []
+    attachment_lookup_error = e
+
+attached_file_names = {
+    str(doc.get("file_name") or doc.get("source") or doc.get("title") or "").strip()
+    for doc in attached_documents
+    if str(doc.get("file_name") or doc.get("source") or doc.get("title") or "").strip()
+}
+
 with st.sidebar:
     st.markdown("### ⚙️ Workspace Config")
     scale_option = st.selectbox("Target Architecture Scale", ["10K Users", "100K Users", "1M Users", "10M+ Users"])
     enable_rag = st.checkbox("Enable RAG Grounding (Supabase)", value=True)
+    chat_mode = st.selectbox("Chat Mode", ["Auto", "Design Blueprint", "Document Lookup"], index=0)
+
+    st.divider()
+
+    st.markdown("### 📎 Upload Files")
+    if "upload_message" in st.session_state:
+        st.success(st.session_state.pop("upload_message"))
+    if attachment_lookup_error is not None:
+        st.warning(
+            "Saved attachments could not be loaded right now, so auto-ingestion is paused."
+        )
+
+    uploaded_files = st.file_uploader(
+        "Attach documents once for grounding",
+        type=["pdf", "txt", "md", "docx"],
+        accept_multiple_files=True,
+        key=f"upload_files_{st.session_state.upload_widget_key}",
+        help="New files are saved immediately. If a file is already in Supabase for this account, it will be treated as already attached.",
+    )
+
+    if uploaded_files:
+        st.session_state.uploaded_files = uploaded_files
+
+    pending_files = []
+    if st.session_state.uploaded_files:
+        pending_files = [
+            file
+            for file in st.session_state.uploaded_files
+            if file.name not in attached_file_names
+        ]
+
+        if pending_files and attachment_lookup_error is None:
+            with st.spinner("Uploading and chunking new files..."):
+                try:
+                    ingest_uploaded_files(
+                        pending_files,
+                        user_id=STATIC_USER_ID,  # static uid
+                        profile_id=STATIC_PROFILE_ID,
+                        session_id=st.session_state.session_id,
+                    )
+                    st.session_state.upload_message = (
+                        f"Saved {len(pending_files)} new file(s) to Supabase."
+                    )
+                    st.session_state.uploaded_files = []
+                    st.session_state.upload_widget_key += 1
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"File ingestion failed: {e}")
+        elif pending_files and attachment_lookup_error is not None:
+            st.info("Upload lookup is unavailable, so new files were not auto-ingested.")
+
+        if st.session_state.uploaded_files:
+            st.caption(f"{len(st.session_state.uploaded_files)} file(s) selected")
+            for file in st.session_state.uploaded_files:
+                if attachment_lookup_error is not None:
+                    status = "status unknown"
+                else:
+                    status = "already attached" if file.name in attached_file_names else "new"
+                st.markdown(f"- `{file.name}` ({status})")
+            if st.button("Clear selection"):
+                st.session_state.uploaded_files = []
+                st.session_state.upload_widget_key += 1
+                st.rerun()
+        else:
+            st.caption("No files selected right now.")
+    else:
+        st.caption("No files attached yet.")
+
+    st.markdown("#### Already attached")
+    if attachment_lookup_error is not None:
+        st.caption("Attachment history is temporarily unavailable.")
+    elif attached_documents:
+        for doc in attached_documents:
+            file_name = doc.get("file_name") or doc.get("source") or doc.get("title") or "Untitled"
+            st.markdown(f"- `{file_name}`")
+    else:
+        st.caption("No saved files found for this account yet.")
 
     st.divider()
 
@@ -139,30 +315,68 @@ st.markdown("""
 """, unsafe_allow_html=True)
 st.caption("Multi-agent collaborative framework for system architecture blueprints.")
 
+if st.session_state.uploaded_files:
+    with st.container(border=True):
+        st.markdown("### 📎 Attached Files")
+        st.write("These files are attached to the current account and are available for grounding.")
+        for file in st.session_state.uploaded_files:
+            st.write(f"- {file.name}")
+
 # Split the workspace into Main View (Left) and Quick Stats/Critique Panel (Right)
 col_workspace, col_stats = st.columns([3, 1], gap="medium")
 
-# Initialize design state
-if "result" not in st.session_state:
-    st.session_state.result = {
-        "problem_statement": "",
-        "requirements": None,
-        "techstack": None,
-        "architecture": None,
-        "diagram": None,
-        "critic_verdict": None,
-        "critic_history": [],
-        "revision_count": 0,
-    }
-
 with col_workspace:
-    user_input = st.chat_input("Describe the architecture target criteria...")
+    user_input = st.chat_input("Describe an architecture or ask to look up attached docs...")
 
     if user_input:
-        with st.spinner("🤖 Multi-agent consensus pipeline running..."):
-            st.session_state.result = generate_design(user_input)
+        st.session_state.lookup_result = None
+
+        if chat_mode == "Document Lookup" or (
+            chat_mode == "Auto" and _looks_like_document_lookup(user_input)
+        ):
+            with st.spinner("🔎 Searching attached documents..."):
+                lookup_sources = search_relevant_docs(
+                    user_input,
+                    limit=5,
+                    user_id=STATIC_USER_ID,  # static uid
+                    profile_id=STATIC_PROFILE_ID,
+                )
+            st.session_state.lookup_result = {
+                "query": user_input,
+                "sources": lookup_sources,
+            }
+            st.session_state.result = _empty_design_result()
+        else:
+            with st.spinner("🤖 Multi-agent consensus pipeline running..."):
+                st.session_state.result = generate_design(
+                    user_input,
+                    user_id=STATIC_USER_ID,  # static uid
+                    profile_id=STATIC_PROFILE_ID,
+                    session_id=st.session_state.session_id,
+                )
 
     res = st.session_state.result
+
+    if st.session_state.lookup_result:
+        lookup_result = st.session_state.lookup_result
+        with st.container(border=True):
+            st.markdown("### 🔎 Document Lookup")
+            st.caption(f"Query: {lookup_result['query']}")
+            sources = lookup_result.get("sources") or []
+            if sources:
+                st.success(f"Found {len(sources)} matching document(s).")
+                for idx, doc in enumerate(sources, start=1):
+                    with st.expander(
+                        f"📄 [{idx}] {doc.get('title') or 'Untitled'} "
+                        f"(Similarity: {doc.get('similarity', 0.0):.4f})"
+                    ):
+                        st.caption(
+                            f"Source: {doc.get('source') or 'unknown'} | "
+                            f"Collection: {doc.get('collection') or 'unknown'}"
+                        )
+                        st.write(doc.get("content") or "")
+            else:
+                st.warning("No matching documents were found for that lookup.")
 
     # Display workspace output tabs if engine has executed successfully
     if res.get("requirements") or res.get("architecture"):

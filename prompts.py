@@ -2,6 +2,11 @@ REQUIREMENTS_PROMPT = """You are a Senior Software Requirements Analyst.
 
 Given a software system design problem, extract structured software requirements.
 
+If RAG context is provided, use it as supporting grounding for the user's intent,
+but do not copy it blindly if it conflicts with the user's prompt.
+If the RAG context includes current session uploaded files or chunks, treat that
+as the highest-priority context for follow-up questions in this session.
+
 Guidelines:
 - Identify all functional requirements.
 - Identify all non-functional requirements (performance, scalability, availability, security, reliability, etc.).
@@ -26,6 +31,11 @@ No other text. No markdown. Return ONLY the JSON object. """
 TECHSTACK_PROMPT = """You are a Principal Software Architect.
 
 Given structured software requirements, recommend an appropriate technology stack.
+
+If RAG context is provided, use it as supporting grounding for the stack choices,
+especially when the retrieved docs reflect reusable patterns or prior approved decisions.
+If the RAG context includes current session uploaded files or chunks, use it as
+the primary grounding for this user's current session.
 
 Guidelines:
 - Recommend technologies that directly satisfy the given requirements.
@@ -55,6 +65,11 @@ Given:
 - Functional requirements
 - Non-functional requirements
 - Recommended technology stack
+
+If RAG context is provided, use it to ground component choices and data flow,
+especially when it contains reusable shared design patterns or session-specific docs.
+If the RAG context includes current session uploaded files or chunks, prioritize
+those files when designing the architecture for this session.
 
 (Optional)
 - Previous architecture
@@ -363,4 +378,3 @@ Rules:
 - Do not include markdown.
 - Return only valid JSON.
 """
-

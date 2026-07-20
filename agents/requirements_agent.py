@@ -1,10 +1,17 @@
 from state import RequirementsOutput, DesignState
 from llm_client import call_llm
 from prompts import REQUIREMENTS_PROMPT
+from rag.query import build_combined_rag_context
 import sys
 import json
 #run fuction
-def req_run(problem_statement: str) -> dict:
+def req_run(
+    problem_statement: str,
+    collection: str | None = "system_design",
+    user_id: str | None = None,
+    profile_id: int | None = None,
+    session_id: str | None = None,
+) -> dict:
     """
     Extract structured requirements from a software system design problem.
     Args:
@@ -15,9 +22,18 @@ def req_run(problem_statement: str) -> dict:
         RuntimeError: If the LLM call or validation fails.
     """
     try:
+        rag_context = build_combined_rag_context(
+            user_query=problem_statement,
+            user_id=user_id,
+            profile_id=profile_id,
+            session_id=session_id,
+        )
         response = call_llm(
             REQUIREMENTS_PROMPT,
-            problem_statement,
+            {
+                "problem_statement": problem_statement,
+                "rag_context": rag_context,
+            },
         )
         validated = RequirementsOutput.model_validate(response)
         return validated.model_dump()
@@ -36,7 +52,12 @@ def requirements_node(state: DesignState) -> dict:
     Writes:
         state["requirements"]
     """
-    requirements = req_run(state["problem_statement"])
+    requirements = req_run(
+        state["problem_statement"],
+        user_id=state.get("user_id"),
+        profile_id=state.get("profile_id"),
+        session_id=state.get("session_id"),
+    )
 
     return {
         "requirements": requirements

@@ -1,67 +1,219 @@
-import os
+from __future__ import annotations
+
+import argparse
+from io import BytesIO
 from pathlib import Path
-from supabase import create_client, Client
-from sentence_transformers import SentenceTransformer
-from dotenv import load_dotenv
 
-# 1. Dynamically locate and load the .env file from the project root folder
-root_dir = Path(__file__).resolve().parents[1]
-env_path = root_dir / ".env"
-load_dotenv(dotenv_path=str(env_path))
+from rag.core import (
+    DEFAULT_COLLECTION,
+    ROOT_DIR,
+    STATIC_PROFILE_ID,
+    STATIC_USER_ID,  # static uid
+    USER_UPLOAD_COLLECTION,
+    build_document_rows,
+    get_embedding_model,
+    get_supabase_client,
+    iter_knowledge_base_files,
+    chunk_text,
+)
 
-# 2. Extract your exact environment variables
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_SERVICE_ROLE = os.getenv("SUPABASE_SERVICE_ROLE")  # Using your exact key name here!
+try:
+    from pypdf import PdfReader
+except Exception:  # pragma: no cover - optional dependency
+    PdfReader = None
 
-if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE:
-    raise ValueError("❌ Error: SUPABASE_URL or SUPABASE_SERVICE_ROLE is missing from your .env file.")
+try:
+    from docx import Document
+except Exception:  # pragma: no cover - optional dependency
+    Document = None
 
-# 3. Initialize the Supabase Client connection
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE)
 
-# 4. Load the Hugging Face Model locally on your machine
-print("🔄 Loading local Hugging Face all-MiniLM-L6-v2 model...")
-embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
-print("✅ Local embedding model loaded successfully!")
+def read_source_file(path: Path) -> tuple[str, str]:
+    content = path.read_text(encoding="utf-8").strip()
+    title = path.stem.replace("_", " ").replace("-", " ").strip().title()
+    return title, content
 
-def insert_document_to_db(title: str, content: str, source: str):
+
+def _extract_text_from_upload(file_name: str, file_bytes: bytes) -> str:
+    suffix = Path(file_name).suffix.lower()
+    if suffix in {".md", ".txt"}:
+        return file_bytes.decode("utf-8", errors="ignore").strip()
+
+    if suffix == ".pdf":
+        if PdfReader is None:
+            raise RuntimeError("PDF support requires pypdf to be installed.")
+        reader = PdfReader(BytesIO(file_bytes))
+        return "\n\n".join(page.extract_text() or "" for page in reader.pages).strip()
+
+    if suffix == ".docx":
+        if Document is None:
+            raise RuntimeError("DOCX support requires python-docx to be installed.")
+        doc = Document(BytesIO(file_bytes))
+        return "\n\n".join(paragraph.text for paragraph in doc.paragraphs if paragraph.text.strip()).strip()
+
+    raise ValueError(f"Unsupported file type: {suffix}")
+
+
+def ingest_knowledge_base(
+    collection: str = DEFAULT_COLLECTION,
+    base_dir: Path | None = None,
+):
     """
-    Generates real 384-dimensional dense vectors using sentence-transformers
-    and pushes the text chunk along with the vector payload straight into Supabase.
+    Load markdown/text documents from rag/knowledge_base, chunk them,
+    embed them locally, and insert them into Supabase.
     """
-    # 5. Format text chunk and compute the vector embedding array
-    combined_text = f"Title: {title}\nContent: {content}"
-    print(f"🧠 Generating vector array for: '{title}'...")
-    real_embedding = embedding_model.encode(combined_text).tolist() 
-    
-    # 6. Map the dictionary keys to match your Supabase table schema
-    data = {
-        "title": title,
-        "content": content,
-        "source": source,
-        "collection": "system_design",  # Added this to satisfy the NOT NULL constraint!
-        "chunk_index": 0,
-        "embedding": real_embedding  
-    }
-    
+    supabase = get_supabase_client()
+    embedding_model = get_embedding_model()
+    kb_dir = base_dir or (ROOT_DIR / "rag" / "knowledge_base")
+
+    rows_to_insert: list[dict] = []
+    for file_path in iter_knowledge_base_files(kb_dir):
+        title, content = read_source_file(file_path)
+        document_rows = build_document_rows(
+            title=title,
+            content=content,
+            source=str(file_path.relative_to(ROOT_DIR)),
+            collection=collection,
+        )
+
+        for row in document_rows:
+            embedding_input = f"Title: {row['title']}\nContent: {row['content']}"
+            row["embedding"] = embedding_model.encode(embedding_input).tolist()
+            rows_to_insert.append(row)
+
+    if not rows_to_insert:
+        print(f"No knowledge base files found in {kb_dir}")
+        return []
+
+    response = supabase.table("documents").insert(rows_to_insert).execute()
+    print(f"Inserted {len(rows_to_insert)} document chunks into Supabase.")
+    return response.data
+
+
+def ingest_uploaded_files(
+    uploaded_files,
+    collection: str = USER_UPLOAD_COLLECTION,
+    user_id: str = STATIC_USER_ID,  # static uid
+    profile_id: int = STATIC_PROFILE_ID,
+    session_id: str | None = None,
+):
+    """
+    Ingest user-uploaded files into the same documents table for now,
+    tagged with temporary static user identity and session metadata.
+    """
+    if not uploaded_files:
+        return []
+
+    supabase = get_supabase_client()
+    embedding_model = get_embedding_model()
+    chunk_rows_to_insert: list[dict] = []
+
+    for uploaded in uploaded_files:
+        file_bytes = uploaded.getvalue()
+        content = _extract_text_from_upload(uploaded.name, file_bytes)
+        title = Path(uploaded.name).stem.replace("_", " ").replace("-", " ").strip().title()
+        chunk_texts = chunk_text(content)
+        parent_metadata = {
+            "source_type": "upload",
+            "file_name": uploaded.name,
+            "mime_type": getattr(uploaded, "type", None),
+            "user_id": user_id,
+            "profile_id": profile_id,
+            "session_id": session_id,
+            "collection": collection,
+            "chunk_count": len(chunk_texts),
+        }
+        parent_row = {
+            "title": title,
+            "content": content,
+            "source": uploaded.name,
+            "collection": collection,
+            "chunk_index": 0,
+            "metadata": parent_metadata,
+            "embedding": embedding_model.encode(
+                f"Title: {title}\nContent: {content}"
+            ).tolist(),
+        }
+        parent_response = supabase.table("documents").insert(parent_row).execute()
+        inserted_parents = parent_response.data or []
+        parent_document_id = inserted_parents[0]["id"] if inserted_parents else None
+
+        for chunk_index, chunk in enumerate(chunk_texts):
+            chunk_metadata = {
+                "source_type": "upload",
+                "file_name": uploaded.name,
+                "mime_type": getattr(uploaded, "type", None),
+                "user_id": user_id,
+                "profile_id": profile_id,
+                "session_id": session_id,
+                "collection": collection,
+                "parent_title": title,
+                "chunk_count": len(chunk_texts),
+            }
+            chunk_row = {
+                "document_id": parent_document_id,
+                "chunk_number": chunk_index,
+                "chunk_text": chunk,
+                "metadata": chunk_metadata,
+                "embedding": embedding_model.encode(
+                    f"Title: {title}\nContent: {chunk}"
+                ).tolist(),
+            }
+            chunk_rows_to_insert.append(chunk_row)
+
+    if not chunk_rows_to_insert:
+        return []
+
+    # Best-effort mirror into document_chunks for the dedicated chunk store.
+    # We reuse the same chunk payload shape, then attach the parent document ID
+    # if Supabase returned it from the parent insert.
     try:
-        response = supabase.table("documents").insert(data).execute()
-        print(f"🚀 Successfully ingested: '{title}' into the database grid!")
-        return response
+        supabase.table("document_chunks").insert(chunk_rows_to_insert).execute()
+        print(
+            f"Inserted {len(chunk_rows_to_insert)} chunk rows into document_chunks "
+            f"for user_id={user_id} and profile_id={profile_id}."
+        )
     except Exception as e:
-        print(f"❌ Ingestion database transaction failed: {str(e)}")
-        return None
+        print(f"document_chunks insert failed, parent documents were still saved: {e}")
 
-# Execution runner block
-if __name__ == "__main__":
-    sample_title = "Scaling a Distributed URL Shortener"
-    sample_content = (
-        "A scalable URL shortener like Bitly requires a highly available infrastructure. "
-        "The application layer handles incoming shorten requests by generating a unique base62 hash identifier. "
-        "To handle 10M active users, a caching layer using Redis must be placed in front of the primary relational database "
-        "to intercept frequent read requests for popular links. The database should use unique constraints on the short-code column "
-        "to prevent mapping collisions under heavy concurrent write loads."
+    print(
+        f"Inserted {len(uploaded_files)} uploaded parent document row(s) into Supabase "
+        f"for user_id={user_id} and profile_id={profile_id}."
     )
-    sample_source = "System Design Primer Blogs"
-    
-    insert_document_to_db(sample_title, sample_content, sample_source)
+    return chunk_rows_to_insert
+
+
+def insert_document_to_db(
+    title: str,
+    content: str,
+    source: str,
+    collection: str = DEFAULT_COLLECTION,
+    metadata: dict | None = None,
+):
+    supabase = get_supabase_client()
+    embedding_model = get_embedding_model()
+    rows = build_document_rows(
+        title=title,
+        content=content,
+        source=source,
+        collection=collection,
+        metadata=metadata,
+    )
+    for row in rows:
+        embedding_input = f"Title: {row['title']}\nContent: {row['content']}"
+        row["embedding"] = embedding_model.encode(embedding_input).tolist()
+    response = supabase.table("documents").insert(rows).execute()
+    return response
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Ingest knowledge base documents into Supabase.")
+    parser.add_argument("--collection", default=DEFAULT_COLLECTION)
+    parser.add_argument("--path", default=str(ROOT_DIR / "rag" / "knowledge_base"))
+    args = parser.parse_args()
+
+    ingest_knowledge_base(collection=args.collection, base_dir=Path(args.path))
+
+
+if __name__ == "__main__":
+    main()

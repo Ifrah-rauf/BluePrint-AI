@@ -1,6 +1,7 @@
 from state import ArchitectureOutput
 from llm_client import call_llm
 from prompts import ARCHITECTURE_PROMPT
+from rag.query import build_combined_rag_context
 import sys
 import json
 
@@ -11,6 +12,11 @@ def arch_run(
     previous_architecture=None,
     revision_notes: list | None = None,
     revision_count: int = 0,
+    problem_statement: str | None = None,
+    collection: str | None = "system_design",
+    user_id: str | None = None,
+    profile_id: int | None = None,
+    session_id: str | None = None,
 ) -> dict:
     """
     Produces a component-level architecture from requirements and tech stack.
@@ -38,11 +44,27 @@ def arch_run(
         RuntimeError: If the LLM call or validation fails.
     """
     try:
+        rag_query_parts = [
+            problem_statement or "",
+            json.dumps(requirements, ensure_ascii=False),
+            json.dumps(techstack, ensure_ascii=False),
+            json.dumps(revision_notes or [], ensure_ascii=False),
+        ]
+        rag_context = build_combined_rag_context(
+            user_query="\n".join(part for part in rag_query_parts if part).strip(),
+            user_id=user_id,
+            profile_id=profile_id,
+            session_id=session_id,
+        )
         response = call_llm(
             ARCHITECTURE_PROMPT,
-            requirements,
-            techstack,
-            revision_notes,
+            {
+                "problem_statement": problem_statement,
+                "requirements": requirements,
+                "techstack": techstack,
+                "revision_notes": revision_notes,
+                "rag_context": rag_context,
+            },
         )
         response["revision_count"] = revision_count
         validated = ArchitectureOutput.model_validate(response)
@@ -69,7 +91,11 @@ def architecture_node(state: dict) -> dict:
             if state.get("critic_verdict")
             else None
         ),
-    revision_count=state["revision_count"],
+        revision_count=state["revision_count"],
+        problem_statement=state.get("problem_statement"),
+        user_id=state.get("user_id"),
+        profile_id=state.get("profile_id"),
+        session_id=state.get("session_id"),
     )
     return {"architecture": output}
 
