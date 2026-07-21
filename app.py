@@ -14,6 +14,7 @@ from rag.ingest import ingest_uploaded_files
 from rag.core import STATIC_USER_ID, STATIC_PROFILE_ID  # static uid
 from graph import generate_design
 from state import DesignState
+from agents.intent_agent import preflight_run, is_affirmative, is_negative
 from uuid import uuid4
 
 
@@ -191,6 +192,15 @@ if "result" not in st.session_state:
 if "lookup_result" not in st.session_state:
     st.session_state.lookup_result = None
 
+if "generate" not in st.session_state:
+    st.session_state.generate = False
+
+if "pending_generate_prompt" not in st.session_state:
+    st.session_state.pending_generate_prompt = None
+
+if "preflight_result" not in st.session_state:
+    st.session_state.preflight_result = None
+
 if "uploaded_files" not in st.session_state:
     st.session_state.uploaded_files = []
 
@@ -221,6 +231,7 @@ with st.sidebar:
     scale_option = st.selectbox("Target Architecture Scale", ["10K Users", "100K Users", "1M Users", "10M+ Users"])
     enable_rag = st.checkbox("Enable RAG Grounding (Supabase)", value=True)
     chat_mode = st.selectbox("Chat Mode", ["Auto", "Design Blueprint", "Document Lookup"], index=0)
+    st.caption(f"Generate mode: {'on' if st.session_state.generate else 'off'}")
 
     st.divider()
 
@@ -326,12 +337,38 @@ if st.session_state.uploaded_files:
 col_workspace, col_stats = st.columns([3, 1], gap="medium")
 
 with col_workspace:
-    user_input = st.chat_input("Describe an architecture or ask to look up attached docs...")
+    if st.session_state.pending_generate_prompt:
+        chat_placeholder = "Reply yes to generate the design, or no to stay in understanding mode..."
+    else:
+        chat_placeholder = "Describe an architecture or ask to look up attached docs..."
+
+    user_input = st.chat_input(chat_placeholder)
 
     if user_input:
         st.session_state.lookup_result = None
 
-        if chat_mode == "Document Lookup" or (
+        if st.session_state.pending_generate_prompt and is_affirmative(user_input):
+            st.session_state.generate = True
+            with st.spinner("🤖 Multi-agent consensus pipeline running..."):
+                st.session_state.result = generate_design(
+                    st.session_state.pending_generate_prompt,
+                    user_id=STATIC_USER_ID,  # static uid
+                    profile_id=STATIC_PROFILE_ID,
+                    session_id=st.session_state.session_id,
+                )
+            st.session_state.generate = False
+            st.session_state.pending_generate_prompt = None
+            st.session_state.preflight_result = None
+        elif st.session_state.pending_generate_prompt and is_negative(user_input):
+            st.session_state.pending_generate_prompt = None
+            st.session_state.preflight_result = {
+                "intent": "aborted",
+                "understanding": "Okay, I won’t generate the design yet.",
+                "generate": False,
+                "question": "Tell me what you want changed or what you want me to do next.",
+            }
+            st.session_state.result = _empty_design_result()
+        elif chat_mode == "Document Lookup" or (
             chat_mode == "Auto" and _looks_like_document_lookup(user_input)
         ):
             with st.spinner("🔎 Searching attached documents..."):
@@ -347,15 +384,38 @@ with col_workspace:
             }
             st.session_state.result = _empty_design_result()
         else:
-            with st.spinner("🤖 Multi-agent consensus pipeline running..."):
-                st.session_state.result = generate_design(
-                    user_input,
-                    user_id=STATIC_USER_ID,  # static uid
-                    profile_id=STATIC_PROFILE_ID,
-                    session_id=st.session_state.session_id,
-                )
+            if chat_mode == "Document Lookup":
+                with st.spinner("🔎 Searching attached documents..."):
+                    lookup_sources = search_relevant_docs(
+                        user_input,
+                        limit=5,
+                        user_id=STATIC_USER_ID,  # static uid
+                        profile_id=STATIC_PROFILE_ID,
+                    )
+                st.session_state.lookup_result = {
+                    "query": user_input,
+                    "sources": lookup_sources,
+                }
+                st.session_state.result = _empty_design_result()
+            else:
+                with st.spinner("🧠 Understanding your request..."):
+                    preflight = preflight_run(user_input)
+                st.session_state.preflight_result = preflight
+                st.session_state.pending_generate_prompt = user_input
+                st.session_state.generate = bool(preflight.get("generate", False))
+                st.session_state.result = _empty_design_result()
 
     res = st.session_state.result
+
+    if st.session_state.preflight_result:
+        preflight = st.session_state.preflight_result
+        with st.container(border=True):
+            st.markdown("### 🧠 Request Understanding")
+            st.write(preflight.get("understanding") or "I understand the request.")
+            question = preflight.get("question") or "Do you want me to generate the design now? (yes/no)"
+            st.info(question)
+            if st.session_state.pending_generate_prompt:
+                st.caption("Reply `yes` to generate, or `no` to keep refining the request.")
 
     if st.session_state.lookup_result:
         lookup_result = st.session_state.lookup_result
