@@ -62,6 +62,7 @@ def arch_run(
                 "problem_statement": problem_statement,
                 "requirements": requirements,
                 "techstack": techstack,
+                "previous_architecture": previous_architecture,
                 "revision_notes": revision_notes,
                 "rag_context": rag_context,
             },

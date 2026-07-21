@@ -75,16 +75,66 @@ those files when designing the architecture for this session.
 - Previous architecture
 - Revision notes from the reviewer
 
-If no previous architecture is provided, generate a new production-ready architecture.
+If no previous architecture is provided, generate a complete production-ready architecture.
+
+The architecture should represent a realistic deployment rather than the minimum number of components.
+
+Include infrastructure, networking, storage, security, and supporting services whenever they are appropriate for the problem.
+
+A typical architecture may include (when applicable):
+
+- Client / Browser / Mobile App
+- CDN
+- Load Balancer
+- API Gateway
+- Multiple application instances
+- Authentication / Authorization Service
+- Cache
+- Database
+- Read Replicas
+- Message Queue
+- Background Workers
+- Object Storage
+- External Services
+- Monitoring / Logging
+
+Do not omit major architectural building blocks simply because they were not explicitly requested.
 
 If a previous architecture and revision notes are provided:
-- Revise the previous architecture.
-- Preserve components that are already correct.
-- Modify only what is necessary to address the revision notes.
-- Do not redesign the system from scratch.
+You MUST update the supplied previous architecture.
+Do NOT generate a completely new design.
+
+- Preserve every component that is already correct.
+- Keep existing component names whenever possible.
+- Only add, remove, or modify components that are necessary to resolve the revision notes.
+- When a revision note identifies a missing component, explicitly add that component.
+- When a revision note identifies a missing connection, explicitly update the connects_to relationships.
+- Do not remove components unless they are incorrect or redundant.
+- The returned architecture must be an improved version of the previous architecture, not a completely different design.
+
+Observability components (Monitoring, Logging, Metrics, Tracing)
+are passive infrastructure.
+They should not initiate application request flows.
+Unless absolutely necessary, use:
+connects_to: []
+for Monitoring, Logging, Prometheus, Grafana,
+Alerting, Metrics, and similar observability services.
+
+Before producing the final architecture, verify that it explicitly addresses:
+
+- Scalability
+- Availability
+- Security
+- Performance
+- Reliability
+- Monitoring
+- Failure recovery
+
+If any of these concerns require additional components or connections, include them in the architecture.
+
+Ensure the architecture satisfies the stated functional requirements, non-functional requirements, and revision notes before returning the final result.
 
 Return ONLY valid JSON in exactly this format:
-
 {
   "design_description": "High-level overview of the architecture.",
   "components": [
@@ -115,10 +165,31 @@ Rules:
   - name
   - responsibility
   - connects_to
+connects_to direction rules (STRICT):
+- connects_to means: THIS component initiates requests TO these components.
+- Never add reverse arrows. If API Gateway calls Auth Service,
+  only API Gateway lists "Auth Service" in connects_to.
+  Auth Service does NOT list "API Gateway" back.
+- Databases and caches are always depended ON.
+  They NEVER have connects_to entries — their list must be empty: []
+- Infrastructure components (load balancers, CDNs) only list
+  the services they forward to, nothing else.
+- If component A calls B, only A has B in connects_to. Never both.
+-Avoid producing simple linear chains unless the system is genuinely that simple.
+-Prefer realistic branching architectures.
 - The names listed in connects_to must exactly match another component's name.
 - Do not invent connections to components that do not exist.
+
+Architecture completeness requirements:
+- Generate approximately 6–10 meaningful components for medium or large systems.
+-Smaller systems may use fewer components if justified.
+- Represent separate infrastructure and application layers.
+- Do not merge unrelated responsibilities into one component.
+- Components should have single, clear responsibilities.
+- Prefer multiple collaborating services over one monolithic service when appropriate.
 - Return only valid JSON.
 - Do not include markdown or code fences.
+
 """
 
 DIAGRAM_PROMPT = """
@@ -152,6 +223,7 @@ Guidelines:
 - Label each component clearly.
 - Show the direction of data flow using arrows.
 - Do not include explanations, markdown, or code fences.
+
 - Return ONLY valid JSON in exactly this format:
 
   {

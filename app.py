@@ -387,56 +387,95 @@ with col_workspace:
         ])
 
         with tab_doc:
-            # Requirements Section
+            # ── Requirements ────────────────────────────────────────────
             st.markdown("## 🎯 System Requirements")
-            if isinstance(res["requirements"], dict):
-                for req_type, req_list in res["requirements"].items():
-                    st.markdown(f"**{req_type.title()}**")
-                    if isinstance(req_list, list):
-                        for r in req_list: st.markdown(f"- {r}")
-                    else:
-                        st.write(req_list)
+            if isinstance(res.get("requirements"), dict):
+                req = res["requirements"]
+                cols = st.columns(2)
+                with cols[0]:
+                    st.markdown("**Functional**")
+                    for r in req.get("functional_requirements", []):
+                        st.markdown(f"- {r}")
+                    st.markdown(f"**Scale:** `{req.get('scale', '—')}`")
+                with cols[1]:
+                    st.markdown("**Non-Functional**")
+                    for r in req.get("non_functional_requirements", []):
+                        st.markdown(f"- {r}")
+                    if req.get("constraints"):
+                        st.markdown("**Constraints**")
+                        for c in req["constraints"]:
+                            st.markdown(f"- {c}")
             else:
-                st.write(res["requirements"])
+                st.write(res.get("requirements"))
 
-            # Tech Stack Section
+            # ── Tech Stack ───────────────────────────────────────────────
             st.markdown("## 💻 Chosen Technology Stack")
-            if isinstance(res["techstack"], dict):
-                html_tags = "".join([f"<span class='tech-tag'>{k}: {v}</span>" for k, v in res["techstack"].items()])
-                st.markdown(f"<div>{html_tags}</div>", unsafe_allow_html=True)
-            elif isinstance(res["techstack"], list):
-                html_tags = "".join([f"<span class='tech-tag'>{item}</span>" for item in res["techstack"]])
-                st.markdown(f"<div>{html_tags}</div>", unsafe_allow_html=True)
+            if isinstance(res.get("techstack"), dict):
+                stack = res["techstack"].get("stack", [])
+                if stack:
+                    header_cols = st.columns([2, 2, 4])
+                    header_cols[0].markdown("**Component**")
+                    header_cols[1].markdown("**Selected**")
+                    header_cols[2].markdown("**Why**")
+                    st.divider()
+                    for item in stack:
+                        row = st.columns([2, 2, 4])
+                        row[0].markdown(f"`{item.get('component', '')}`")
+                        row[1].markdown(f"**{item.get('choice', '')}**")
+                        row[2].markdown(item.get('justification', ''))
             else:
-                st.write(res["techstack"])
+                st.write(res.get("techstack"))
 
-            # Architecture Blueprint Section
+            # ── Architecture ─────────────────────────────────────────────
             st.markdown("## 🏛️ Architectural Blueprint")
-            if isinstance(res["architecture"], dict):
-                for layer, desc in res["architecture"].items():
-                    st.markdown(f"""
-                    <div class="spec-card">
-                        <strong>🛠️ Layer: {layer.title()}</strong><br>
-                        <span style="color: #475467;">{desc}</span>
-                    </div>
-                    """, unsafe_allow_html=True)
+            if isinstance(res.get("architecture"), dict):
+                arch = res["architecture"]
+
+                if arch.get("design_description"):
+                    st.markdown(f"> {arch['design_description']}")
+
+                st.markdown("### Components")
+                for comp in arch.get("components", []):
+                    with st.container(border=True):
+                        st.markdown(f"**{comp.get('name', '')}**")
+                        st.caption(comp.get('responsibility', ''))
+                        deps = comp.get("connects_to") or comp.get("depends_on") or []
+                        if deps:
+                            st.markdown("*Depends on:* " + " · ".join([f"`{d}`" for d in deps]))
+
+                if arch.get("tradeoffs"):
+                    with st.expander("⚖️ Tradeoffs"):
+                        for t in arch["tradeoffs"]:
+                            st.markdown(f"- {t}")
             else:
-                st.write(res["architecture"])
+                st.write(res.get("architecture"))
 
-            # Critic Engine Feedback
+            # ── Critic Verdict ───────────────────────────────────────────
             if res.get("critic_verdict"):
+                verdict = res["critic_verdict"]
+                is_approved = verdict.get("verdict") == "APPROVE"
                 st.markdown("## 🔍 Agentic Critic Verdict")
-                st.markdown(f"""
-                <div class="critic-box">
-                    <strong>Review Summary:</strong><br>{res['critic_verdict']}
-                </div>
-                """, unsafe_allow_html=True)
+                if is_approved:
+                    st.success("✅ **Status: APPROVED**")
+                else:
+                    st.error("🔴 **Status: REVISE**")
+                    issues = verdict.get("issues", [])
+                    if issues:
+                        st.markdown("**Issues Found:**")
+                        for issue in issues:
+                            st.markdown(f"- {issue}")
 
+            # ── Revision History ─────────────────────────────────────────
             if res.get("critic_history"):
-                with st.expander("⏳ Revision Changelog History"):
+                with st.expander(f"⏳ Revision History ({len(res['critic_history'])} iterations)"):
                     for i, review in enumerate(res["critic_history"], start=1):
-                        st.markdown(f"**Iteration Revision {i}**")
-                        st.write(review)
+                        verdict_val = review.get("verdict", "")
+                        icon = "✅" if verdict_val == "APPROVE" else "🔴"
+                        st.markdown(f"**{icon} Iteration {i} — {verdict_val}**")
+                        for issue in review.get("issues", []):
+                            st.markdown(f"  - {issue}")
+                        if i < len(res["critic_history"]):
+                            st.divider()
 
         with tab_diagram:
             st.markdown("### Structural Diagram View")
