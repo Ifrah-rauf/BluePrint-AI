@@ -8,7 +8,12 @@ import streamlit as st
 from tools.diagram_renderer import render_mermaid_chart
 from rag.query import fetch_attached_documents, search_relevant_docs
 from rag.ingest import ingest_uploaded_files
-from auth.auth import sign_in, sign_up, get_profile
+from auth.auth import (
+    sign_in,
+    sign_up,
+    sign_out,
+    get_profile,
+)
 from auth.session import (
     set_auth_user,
     get_auth_user,
@@ -367,8 +372,6 @@ with st.sidebar:
         st.session_state.uploaded_files = uploaded_files
     
     if st.button("Logout"):
-        from auth.auth import sign_out
-
         sign_out()
         clear_auth_session()
         st.rerun()
@@ -386,8 +389,8 @@ with st.sidebar:
                 try:
                     ingest_uploaded_files(
                         pending_files,
-                        user_id=STATIC_USER_ID,  # static uid
-                        profile_id=STATIC_PROFILE_ID,
+                        user_id=USER_ID,
+                        profile_id=PROFILE_ID,
                         session_id=st.session_state.session_id,
                     )
                     st.session_state.upload_message = (
@@ -471,10 +474,12 @@ if user_input:
         if st.session_state.pending_generate_prompt and is_affirmative(user_input):
             st.session_state.generate = True
             with st.spinner("🤖 Multi-agent consensus pipeline running..."):
+                st.session_state.preflight_result = None
+                st.session_state.pending_generate_prompt = None
                 st.session_state.result = generate_design(
                     st.session_state.pending_generate_prompt,
-                    user_id=STATIC_USER_ID,  # static uid
-                    profile_id=STATIC_PROFILE_ID,
+                    user_id=USER_ID,
+                    profile_id=PROFILE_ID,
                     session_id=st.session_state.session_id,
                 )
             st.session_state.generate = False
@@ -505,13 +510,13 @@ if user_input:
             }
             st.session_state.result = _empty_design_result()
         else:
-            with st.spinner("🤖 Multi-agent consensus pipeline running..."):
-                st.session_state.result = generate_design(
-                    user_input,
-                    user_id=STATIC_USER_ID,  # static uid
-                    profile_id=STATIC_PROFILE_ID,
-                    session_id=st.session_state.session_id,
-                )
+            with st.spinner("🧠 Understanding your request..."):
+                preflight = preflight_run(user_input)
+
+            st.session_state.preflight_result = preflight
+            st.session_state.pending_generate_prompt = user_input
+            st.session_state.generate = bool(preflight.get("generate", False))
+            st.session_state.result = _empty_design_result()
 
     res = st.session_state.result
 
@@ -669,7 +674,12 @@ if user_input:
             st.markdown("### Database Context Matches (Supabase pgvector)")
             if enable_rag and user_input:
                 with st.spinner("📚 Fetching semantic grounding vectors from Supabase..."):
-                    fetched_sources = search_relevant_docs(user_input, limit=3)
+                    fetched_sources = search_relevant_docs(
+                        user_input,
+                        limit=3,
+                        user_id=USER_ID,
+                        profile_id=PROFILE_ID,
+                    )
 
                 if fetched_sources:
                     st.success(f"🎯 Retrieved {len(fetched_sources)} highly similar blueprint records!")
