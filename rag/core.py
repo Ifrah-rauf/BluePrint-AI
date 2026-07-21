@@ -15,8 +15,7 @@ SUPPORTED_KB_EXTENSIONS = {".md", ".txt"}
 DEFAULT_COLLECTION = "system_design"
 USER_UPLOAD_COLLECTION = "user_uploads"
 DEFAULT_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-STATIC_USER_ID = "525b14c4-5ed8-4088-891e-455df5159bb8"  # static uid
-STATIC_PROFILE_ID = 1
+
 
 # 1.SET UP THE SUPABASE ENDPOINT
 def get_supabase_client() -> Client:

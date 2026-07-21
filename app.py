@@ -4,18 +4,130 @@ load_dotenv()
 
 import streamlit as st
 
-# --- STREAMLIT PAGE CONFIG (Must be the very first Streamlit command) ---
-st.set_page_config(page_title="BluePrint-AI Workplace", layout="wide", initial_sidebar_state="expanded")
-
 # 2. Import regular libraries
 from tools.diagram_renderer import render_mermaid_chart
 from rag.query import fetch_attached_documents, search_relevant_docs
 from rag.ingest import ingest_uploaded_files
-from rag.core import STATIC_USER_ID, STATIC_PROFILE_ID  # static uid
+from auth.auth import sign_in, sign_up, get_profile
+from auth.session import (
+    set_auth_user,
+    get_auth_user,
+    get_profile as session_profile,
+    clear_auth_session,
+    is_authenticated,
+)
 from graph import generate_design
 from state import DesignState
 from agents.intent_agent import preflight_run, is_affirmative, is_negative
 from uuid import uuid4
+
+# --- STREAMLIT PAGE CONFIG (Must be the very first Streamlit command) ---
+st.set_page_config(page_title="BluePrint-AI Workplace", layout="wide", initial_sidebar_state="expanded")
+
+if not is_authenticated():
+
+    st.title("🔐 BluePrint-AI Login")
+
+    tab1, tab2 = st.tabs(
+        ["Login", "Create Account"]
+    )
+
+    with tab1:
+        email = st.text_input(
+            "Email",
+            key="login_email"
+        )
+
+        password = st.text_input(
+            "Password",
+            type="password",
+            key="login_password"
+        )
+
+        if st.button("Login"):
+
+            try:
+                response = sign_in(
+                    email,
+                    password
+                )
+
+                user = response.user
+
+                profile_response = get_profile(
+                    user.id
+                )
+
+                set_auth_user(
+                    user,
+                    profile_response.data
+                )
+
+                st.success(
+                    "Login successful"
+                )
+
+                st.rerun()
+
+            except Exception as e:
+                st.error(str(e))
+
+
+    with tab2:
+
+        email = st.text_input(
+            "Email",
+            key="signup_email"
+        )
+
+        password = st.text_input(
+            "Password",
+            type="password",
+            key="signup_password"
+        )
+
+        full_name = st.text_input(
+            "Full Name"
+        )
+
+        organization = st.text_input(
+            "Organization"
+        )
+
+
+        if st.button("Create Account"):
+
+            try:
+
+                sign_up(
+                    email,
+                    password,
+                    full_name,
+                    organization
+                )
+
+                st.success(
+                    "Account created. Check email if confirmation is enabled."
+                )
+
+            except Exception as e:
+                st.error(str(e))
+
+
+    st.stop()
+    
+user = get_auth_user()
+profile = session_profile()
+
+if user is None or profile is None:
+    st.error("Authentication session expired.")
+    clear_auth_session()
+    st.stop()
+
+USER_ID = user.id
+PROFILE_ID = profile["profile_id"]
+
+
 
 
 def _empty_design_result() -> dict:
@@ -213,9 +325,9 @@ if "session_id" not in st.session_state:
 attachment_lookup_error = None
 try:
     attached_documents = fetch_attached_documents(
-        STATIC_USER_ID,  # static uid
-        STATIC_PROFILE_ID,
-    )
+                            USER_ID,
+                            PROFILE_ID,
+)
 except Exception as e:
     attached_documents = []
     attachment_lookup_error = e
@@ -253,6 +365,13 @@ with st.sidebar:
 
     if uploaded_files:
         st.session_state.uploaded_files = uploaded_files
+    
+    if st.button("Logout"):
+        from auth.auth import sign_out
+
+        sign_out()
+        clear_auth_session()
+        st.rerun()
 
     pending_files = []
     if st.session_state.uploaded_files:
@@ -267,9 +386,9 @@ with st.sidebar:
                 try:
                     ingest_uploaded_files(
                         pending_files,
-                        user_id=STATIC_USER_ID,  # static uid
-                        profile_id=STATIC_PROFILE_ID,
-                        session_id=st.session_state.session_id,
+                        user_id=USER_ID,
+                        profile_id=PROFILE_ID,
+                        session_id=st.session_state.session_id
                     )
                     st.session_state.upload_message = (
                         f"Saved {len(pending_files)} new file(s) to Supabase."
@@ -343,6 +462,8 @@ with col_workspace:
         chat_placeholder = "Describe an architecture or ask to look up attached docs..."
 
     user_input = st.chat_input(chat_placeholder)
+if user_input:
+    st.session_state.last_query = user_input
 
     if user_input:
         st.session_state.lookup_result = None
@@ -557,11 +678,16 @@ with col_workspace:
                 st.info("No active diagram matrix generated for this workflow task yet.")
             st.caption("💡 Tip: This visual blueprint updates dynamically based on consensus architectural constraints.")
 
-        with tab_rag:
-            st.markdown("### Database Context Matches (Supabase pgvector)")
-            if enable_rag and user_input:
-                with st.spinner("📚 Fetching semantic grounding vectors from Supabase..."):
-                    fetched_sources = search_relevant_docs(user_input, limit=3)
+    with tab_rag:
+        st.markdown("### Database Context Matches (Supabase pgvector)")
+        if enable_rag and user_input:
+            with st.spinner("📚 Fetching semantic grounding vectors from Supabase..."):
+                fetched_sources = search_relevant_docs(
+                    user_input,
+                    limit=3,
+                    user_id=USER_ID,
+                    profile_id=PROFILE_ID,
+                )
 
                 if fetched_sources:
                     st.success(f"🎯 Retrieved {len(fetched_sources)} highly similar blueprint records!")
