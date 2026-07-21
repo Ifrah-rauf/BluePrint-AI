@@ -386,9 +386,9 @@ with st.sidebar:
                 try:
                     ingest_uploaded_files(
                         pending_files,
-                        user_id=USER_ID,
-                        profile_id=PROFILE_ID,
-                        session_id=st.session_state.session_id
+                        user_id=STATIC_USER_ID,  # static uid
+                        profile_id=STATIC_PROFILE_ID,
+                        session_id=st.session_state.session_id,
                     )
                     st.session_state.upload_message = (
                         f"Saved {len(pending_files)} new file(s) to Supabase."
@@ -496,8 +496,8 @@ if user_input:
                 lookup_sources = search_relevant_docs(
                     user_input,
                     limit=5,
-                    user_id=STATIC_USER_ID,  # static uid
-                    profile_id=STATIC_PROFILE_ID,
+                    user_id=USER_ID,
+                    profile_id=PROFILE_ID,
                 )
             st.session_state.lookup_result = {
                 "query": user_input,
@@ -505,26 +505,13 @@ if user_input:
             }
             st.session_state.result = _empty_design_result()
         else:
-            if chat_mode == "Document Lookup":
-                with st.spinner("🔎 Searching attached documents..."):
-                    lookup_sources = search_relevant_docs(
-                        user_input,
-                        limit=5,
-                        user_id=STATIC_USER_ID,  # static uid
-                        profile_id=STATIC_PROFILE_ID,
-                    )
-                st.session_state.lookup_result = {
-                    "query": user_input,
-                    "sources": lookup_sources,
-                }
-                st.session_state.result = _empty_design_result()
-            else:
-                with st.spinner("🧠 Understanding your request..."):
-                    preflight = preflight_run(user_input)
-                st.session_state.preflight_result = preflight
-                st.session_state.pending_generate_prompt = user_input
-                st.session_state.generate = bool(preflight.get("generate", False))
-                st.session_state.result = _empty_design_result()
+            with st.spinner("🤖 Multi-agent consensus pipeline running..."):
+                st.session_state.result = generate_design(
+                    user_input,
+                    user_id=STATIC_USER_ID,  # static uid
+                    profile_id=STATIC_PROFILE_ID,
+                    session_id=st.session_state.session_id,
+                )
 
     res = st.session_state.result
 
@@ -678,16 +665,11 @@ if user_input:
                 st.info("No active diagram matrix generated for this workflow task yet.")
             st.caption("💡 Tip: This visual blueprint updates dynamically based on consensus architectural constraints.")
 
-    with tab_rag:
-        st.markdown("### Database Context Matches (Supabase pgvector)")
-        if enable_rag and user_input:
-            with st.spinner("📚 Fetching semantic grounding vectors from Supabase..."):
-                fetched_sources = search_relevant_docs(
-                    user_input,
-                    limit=3,
-                    user_id=USER_ID,
-                    profile_id=PROFILE_ID,
-                )
+        with tab_rag:
+            st.markdown("### Database Context Matches (Supabase pgvector)")
+            if enable_rag and user_input:
+                with st.spinner("📚 Fetching semantic grounding vectors from Supabase..."):
+                    fetched_sources = search_relevant_docs(user_input, limit=3)
 
                 if fetched_sources:
                     st.success(f"🎯 Retrieved {len(fetched_sources)} highly similar blueprint records!")
