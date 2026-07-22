@@ -48,5 +48,29 @@ def call_llm(system_prompt: str, *inputs) -> dict:
             f"LLM call failed for model {e}"
         ) from e
 
+
+def stream_llm(system_prompt: str, *inputs):
+    """
+    Generator yielding AI tokens in real-time as they stream from the LLM.
+    Compatible with Streamlit's st.write_stream().
+    """
+    if len(inputs) == 1:
+        user_content = _format_payload(inputs[0])
+    else:
+        user_content = _format_payload(inputs)
+
+    response_stream = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content}
+        ],
+        stream=True,
+    )
+    for chunk in response_stream:
+        if chunk.choices and chunk.choices[0].delta.content:
+            yield chunk.choices[0].delta.content
+
+
 def get_client():
     return client

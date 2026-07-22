@@ -209,6 +209,51 @@ def insert_document_to_db(
     return response
 
 
+def save_generated_blueprint_to_db(
+    problem_statement: str,
+    design_result: dict,
+    user_id: str = STATIC_USER_ID,
+    profile_id: int = STATIC_PROFILE_ID,
+):
+    """
+    Save a completed design blueprint into the Supabase documents table.
+    """
+    try:
+        supabase = get_supabase_client()
+        embedding_model = get_embedding_model()
+
+        reqs = design_result.get("requirements") or {}
+        tech = design_result.get("techstack") or {}
+        arch = design_result.get("architecture") or {}
+
+        content_summary = (
+            f"Problem: {problem_statement}\n"
+            f"Requirements: {reqs}\n"
+            f"TechStack: {tech}\n"
+            f"Architecture: {arch}"
+        )
+
+        row = {
+            "title": problem_statement.strip().title(),
+            "content": content_summary[:4000],
+            "source": "generated_blueprint",
+            "collection": "generated_blueprints",
+            "chunk_index": 0,
+            "metadata": {
+                "user_id": user_id,
+                "profile_id": profile_id,
+                "source_type": "blueprint_generation",
+                "revision_count": design_result.get("revision_count", 0),
+            },
+            "embedding": embedding_model.encode(problem_statement).tolist(),
+        }
+        supabase.table("documents").insert(row).execute()
+        print(f"Saved generated blueprint '{problem_statement}' to Supabase documents table.")
+    except Exception as e:
+        print(f"Failed to save generated blueprint to Supabase: {e}")
+
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Ingest knowledge base documents into Supabase.")
     parser.add_argument("--collection", default=DEFAULT_COLLECTION)
