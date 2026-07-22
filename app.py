@@ -3,6 +3,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import streamlit as st
+import json
+import re
 
 # 2. Import regular libraries
 from tools.diagram_renderer import render_mermaid_chart
@@ -24,17 +26,19 @@ from auth.session import (
 )
 from auth.supabase_client import supabase
 from llm_client import stream_llm
+from prompts import ANSWER_PROMPT
 from rag.query import (
     fetch_attached_documents,
     search_relevant_docs,
     fetch_recent_blueprints,
+    fetch_chat_sessions,
     save_chat_message,
     fetch_chat_messages,
+    build_combined_rag_context,
 )
 from rag.ingest import ingest_uploaded_files, save_generated_blueprint_to_db
-from graph import generate_design, generate_design_stream
+from graph import generate_design_stream
 from state import DesignState
-from agents.intent_agent import preflight_run, is_affirmative, is_negative
 from uuid import uuid4
 
 # --- STREAMLIT PAGE CONFIG (Must be the very first Streamlit command) ---
@@ -94,6 +98,62 @@ def restore_auth_session_from_cookie() -> bool:
         return False
 
 
+def render_auth_gate(message: str | None = None) -> None:
+    st.title("🔐 BluePrint-AI Login")
+    if message:
+        st.info(message)
+    else:
+        st.info("No active user session found. Sign in or create an account to continue.")
+
+    if st.session_state.get("show_signup_inline"):
+        st.subheader("Create Account")
+        email = st.text_input("Email", key="inline_signup_email")
+        password = st.text_input("Password", type="password", key="inline_signup_password")
+        full_name = st.text_input("Full Name", key="inline_signup_full_name")
+        organization = st.text_input("Organization", key="inline_signup_organization")
+
+        col_create, col_back = st.columns(2)
+        with col_create:
+            if st.button("Create Account", key="inline_create_account"):
+                try:
+                    sign_up(email, password, full_name, organization)
+                    st.success("Account created. Check your email if confirmation is enabled.")
+                    st.session_state.show_signup_inline = False
+                except Exception as e:
+                    st.error(str(e))
+        with col_back:
+            if st.button("Back to Login", key="inline_back_to_login"):
+                st.session_state.show_signup_inline = False
+                st.rerun()
+    else:
+        st.subheader("Login")
+        email = st.text_input("Email", key="login_email")
+        password = st.text_input("Password", type="password", key="login_password")
+        remember_me = st.checkbox("Remember me on this device", value=True, key="remember_me")
+
+        col_login, col_signup = st.columns(2)
+        with col_login:
+            if st.button("Login", key="login_button"):
+                try:
+                    response = sign_in(
+                        email,
+                        password,
+                        remember_me=remember_me,
+                    )
+
+                    user = response.user
+                    profile_response = get_profile(user.id)
+                    set_auth_user(user, profile_response.data)
+                    st.success("Login successful")
+                    st.rerun()
+                except Exception as e:
+                    st.error(str(e))
+        with col_signup:
+            if st.button("Create Account", key="switch_to_signup"):
+                st.session_state.show_signup_inline = True
+                st.rerun()
+
+
 refresh_token_cookie = get_refresh_token_cookie()
 restore_attempted = st.session_state.get("auth_restore_attempted", False)
 retry_pending = st.session_state.get("auth_restore_retry_pending", False)
@@ -107,110 +167,15 @@ if refresh_token_cookie and (not restore_attempted or retry_pending):
         st.session_state["auth_restore_retry_pending"] = True
 
 if not is_authenticated():
-
-    st.title("🔐 BluePrint-AI Login")
-
-    tab1, tab2 = st.tabs(
-        ["Login", "Create Account"]
-    )
-
-    with tab1:
-        email = st.text_input(
-            "Email",
-            key="login_email"
-        )
-
-        password = st.text_input(
-            "Password",
-            type="password",
-            key="login_password"
-        )
-
-        remember_me = st.checkbox(
-            "Remember me on this device",
-            value=True,
-            key="remember_me"
-        )
-
-        if st.button("Login"):
-
-            try:
-                response = sign_in(
-                    email,
-                    password,
-                    remember_me=remember_me,
-                )
-
-                user = response.user
-
-                profile_response = get_profile(
-                    user.id
-                )
-
-                set_auth_user(
-                    user,
-                    profile_response.data
-                )
-
-                st.success(
-                    "Login successful"
-                )
-
-                st.rerun()
-
-            except Exception as e:
-                st.error(str(e))
-
-
-    with tab2:
-
-        email = st.text_input(
-            "Email",
-            key="signup_email"
-        )
-
-        password = st.text_input(
-            "Password",
-            type="password",
-            key="signup_password"
-        )
-
-        full_name = st.text_input(
-            "Full Name"
-        )
-
-        organization = st.text_input(
-            "Organization"
-        )
-
-
-        if st.button("Create Account"):
-
-            try:
-
-                sign_up(
-                    email,
-                    password,
-                    full_name,
-                    organization
-                )
-
-                st.success(
-                    "Account created. Check email if confirmation is enabled."
-                )
-
-            except Exception as e:
-                st.error(str(e))
-
-
+    render_auth_gate()
     st.stop()
 
 user = get_auth_user()
 profile = session_profile()
 
 if user is None or profile is None:
-    st.error("Authentication session expired.")
     clear_auth_session()
+    render_auth_gate("Your session is no longer valid. Sign in again or create a new account.")
     st.stop()
 
 USER_ID = user.id
@@ -230,56 +195,152 @@ def _empty_design_result() -> dict:
     }
 
 
-def _looks_like_document_lookup(user_input: str) -> bool:
-    text = user_input.lower()
-    lookup_actions = (
-        "look up",
-        "lookup",
-        "search",
-        "find",
-        "retrieve",
-        "show",
-        "summarize",
-        "summarise",
-        "list",
-        "read",
-        "inspect",
-    )
-    lookup_targets = (
-        "document",
-        "documents",
-        "file",
-        "files",
-        "attachment",
-        "attachments",
-        "upload",
-        "uploads",
-        "pdf",
-        "notes",
-        "note",
-        "chunk",
-        "chunks",
-        "context",
-    )
-    design_signals = (
-        "architecture",
-        "architectural",
-        "system design",
-        "design blueprint",
-        "tech stack",
-        "scalable",
-        "service",
-        "services",
-        "database",
-        "api",
-        "gateway",
-    )
+def _is_generate_command(user_input: str) -> bool:
+    text = user_input.strip().lower()
+    if not text:
+        return False
 
-    action_hits = sum(1 for term in lookup_actions if term in text)
-    target_hits = sum(1 for term in lookup_targets if term in text)
-    design_hits = sum(1 for term in design_signals if term in text)
+    command_patterns = (
+        r"\bgenerate\s+(the\s+)?design\b",
+        r"\bgenerate\s+(the\s+)?blueprint\b",
+        r"\bgenerate\s+(the\s+)?architecture\b",
+        r"\bcreate\s+(the\s+)?design\b",
+        r"\bbuild\s+(the\s+)?design\b",
+        r"\bmake\s+(the\s+)?design\b",
+    )
+    return any(re.search(pattern, text) for pattern in command_patterns)
 
-    return action_hits > 0 and target_hits > 0 and design_hits == 0
+
+def _resolve_generation_prompt(user_input: str, fallback_prompt: str | None = None) -> str | None:
+    text = user_input.strip()
+    if not text:
+        return fallback_prompt.strip() if fallback_prompt else None
+
+    if not _is_generate_command(text):
+        return None
+
+    command_only = re.sub(
+        r"(?i)\b(generate|create|build|make)\b\s+(?:the\s+)?(design|blueprint|architecture)\b",
+        "",
+        text,
+    ).strip(" \t\n\r:,-")
+    command_only = re.sub(r"(?i)^(?:for|about|to|of|on|with|please)\b\s*", "", command_only).strip()
+
+    if command_only:
+        return command_only
+
+    if fallback_prompt and fallback_prompt.strip():
+        return fallback_prompt.strip()
+
+    return None
+
+
+def _summarize_current_design(result: dict) -> str:
+    if not result or not any(result.values()):
+        return ""
+
+    summary = {
+        "problem_statement": result.get("problem_statement"),
+        "requirements": result.get("requirements"),
+        "techstack": result.get("techstack"),
+        "architecture": result.get("architecture"),
+        "diagram": result.get("diagram"),
+    }
+    return json.dumps(summary, ensure_ascii=False, indent=2)
+
+
+def _build_answer_context(user_input: str) -> str:
+    rag_context = build_combined_rag_context(
+        user_query=user_input,
+        user_id=USER_ID,
+        profile_id=PROFILE_ID,
+        session_id=st.session_state.session_id,
+    )
+    design_context = _summarize_current_design(st.session_state.result)
+
+    blocks = []
+    if design_context:
+        blocks.append("Current Design Context:\n" + design_context)
+    if rag_context and rag_context != "No relevant retrieved documents.":
+        blocks.append("Relevant Context:\n" + rag_context)
+
+    return "\n\n".join(blocks)
+
+
+def _answer_user_message(user_input: str) -> str:
+    answer_context = _build_answer_context(user_input)
+    with st.chat_message("assistant"):
+        stream = stream_llm(
+            ANSWER_PROMPT,
+            {
+                "user_input": user_input,
+                "answer_context": answer_context,
+            },
+        )
+        answer_text = st.write_stream(stream)
+
+    if isinstance(answer_text, str):
+        return answer_text.strip()
+
+    if isinstance(answer_text, list):
+        return "".join(str(part) for part in answer_text).strip()
+
+    return ""
+
+
+def _run_design_generation(prompt: str, status=None) -> None:
+    if not prompt:
+        st.error("No generation prompt was available.")
+        return
+
+    if status is None:
+        with st.status("Running multi-agent pipeline...", expanded=True) as local_status:
+            _run_design_generation(prompt, status=local_status)
+        return
+
+    status.update(label="Running multi-agent pipeline...", state="running")
+    final_state = _empty_design_result()
+    revision_pass = 0
+    for update in generate_design_stream(
+        prompt,
+        user_id=USER_ID,
+        profile_id=PROFILE_ID,
+        session_id=st.session_state.session_id,
+    ):
+        for node_name, node_output in update.items():
+            final_state.update(node_output)
+            if node_name == "requirements":
+                status.write("✅ Requirements drafted")
+            elif node_name == "techstack":
+                status.write("✅ Tech stack chosen")
+            elif node_name == "architecture":
+                revision_pass += 1
+                label = "✅ Architecture blueprint ready" if revision_pass == 1 else f"🔁 Architecture revised (pass {revision_pass})"
+                status.write(label)
+            elif node_name == "critic":
+                verdict = node_output.get("critic_verdict", {}).get("verdict", "?")
+                status.write(f"🔍 Critic verdict: {verdict}")
+            elif node_name == "diagram":
+                status.write("✅ Diagram generated")
+
+    st.session_state.result = final_state
+    status.update(label="Design complete", state="complete")
+
+    save_chat_message(
+        st.session_state.session_id,
+        USER_ID,
+        "assistant",
+        "Design generated: requirements, tech stack, architecture, and diagram are ready."
+    )
+    try:
+        save_generated_blueprint_to_db(
+            problem_statement=prompt,
+            design_result=final_state,
+            user_id=USER_ID,
+            profile_id=PROFILE_ID,
+        )
+    except Exception as e:
+        st.warning(f"Design generated, but saving it to your blueprint history failed: {e}")
 
 # 3. Dynamic & Theme-Aware Styling
 st.markdown("""
@@ -396,17 +457,11 @@ header[data-testid="stHeader"], [data-testid="stToolbar"], #MainMenu {
 if "result" not in st.session_state:
     st.session_state.result = _empty_design_result()
 
-if "lookup_result" not in st.session_state:
-    st.session_state.lookup_result = None
+if "last_user_prompt" not in st.session_state:
+    st.session_state.last_user_prompt = None
 
-if "generate" not in st.session_state:
-    st.session_state.generate = False
-
-if "pending_generate_prompt" not in st.session_state:
-    st.session_state.pending_generate_prompt = None
-
-if "preflight_result" not in st.session_state:
-    st.session_state.preflight_result = None
+if "last_answer" not in st.session_state:
+    st.session_state.last_answer = None
 
 if "uploaded_files" not in st.session_state:
     st.session_state.uploaded_files = []
@@ -437,8 +492,6 @@ with st.sidebar:
     st.markdown("### ⚙️ Workspace Config")
     scale_option = st.selectbox("Target Architecture Scale", ["10K Users", "100K Users", "1M Users", "10M+ Users"])
     enable_rag = st.checkbox("Enable RAG Grounding (Supabase)", value=True)
-    chat_mode = st.selectbox("Chat Mode", ["Auto", "Design Blueprint", "Document Lookup"], index=0)
-    st.caption(f"Generate mode: {'on' if st.session_state.generate else 'off'}")
 
     st.divider()
 
@@ -460,11 +513,6 @@ with st.sidebar:
 
     if uploaded_files:
         st.session_state.uploaded_files = uploaded_files
-
-    if st.button("Logout"):
-        sign_out()
-        clear_auth_session()
-        st.rerun()
 
     pending_files = []
     if st.session_state.uploaded_files:
@@ -508,10 +556,8 @@ with st.sidebar:
                 st.rerun()
         else:
             st.caption("No files selected right now.")
-    else:
-        st.caption("No files attached yet.")
 
-    st.markdown("#### Already attached")
+    st.markdown("#### Saved attachments")
     if attachment_lookup_error is not None:
         st.caption("Attachment history is temporarily unavailable.")
     elif attached_documents:
@@ -559,161 +605,48 @@ if st.session_state.uploaded_files:
 col_workspace, col_stats = st.columns([3, 1], gap="medium")
 
 with col_workspace:
-    # --- PERSISTENT CHAT HISTORY DISPLAY ---
-    chat_history = fetch_chat_messages(st.session_state.session_id)
+    latest_chat_sessions = fetch_chat_sessions(USER_ID, limit=1)
+    if latest_chat_sessions:
+        latest_session_id = str(latest_chat_sessions[0].get("id") or "")
+        if latest_session_id:
+            current_messages = fetch_chat_messages(st.session_state.session_id)
+            if not current_messages:
+                st.session_state.session_id = latest_session_id
+
+    active_session_id = st.session_state.session_id
+    chat_history = fetch_chat_messages(active_session_id)
+
     if chat_history:
-        with st.expander("💬 Conversation History", expanded=True):
-            for msg in chat_history:
-                with st.chat_message(msg.get("role", "user")):
-                    st.write(msg.get("message", ""))
+        for msg in chat_history:
+            with st.chat_message(msg.get("role", "user")):
+                st.write(msg.get("message", ""))
 
-    if st.session_state.pending_generate_prompt:
-        chat_placeholder = "Reply yes to generate the design, or no to stay in understanding mode..."
-    else:
-        chat_placeholder = "Describe an architecture or ask to look up attached docs..."
-
+    chat_placeholder = "Ask a question or add 'generate design' when you want a blueprint."
     user_input = st.chat_input(chat_placeholder)
 
     if user_input:
-        st.session_state.last_query = user_input
-        st.session_state.lookup_result = None
-        # Save user message to Supabase
-        save_chat_message(st.session_state.session_id, "user", user_input)
+        previous_prompt = st.session_state.last_user_prompt
+        st.session_state.last_user_prompt = user_input
+        save_chat_message(active_session_id, USER_ID, "user", user_input)
 
-        if st.session_state.pending_generate_prompt and is_affirmative(user_input):
-            st.session_state.generate = True
-            with st.status("Running multi-agent pipeline...", expanded=True) as status:
-                final_state = _empty_design_result()
-                revision_pass = 0
-                for update in generate_design_stream(
-                    user_input,
-                    user_id=USER_ID,
-                    profile_id=PROFILE_ID,
-                    session_id=st.session_state.session_id,
-                ):
-                    for node_name, node_output in update.items():
-                        final_state.update(node_output)
-                        if node_name == "requirements":
-                            status.write("✅ Requirements drafted")
-                        elif node_name == "techstack":
-                            status.write("✅ Tech stack chosen")
-                        elif node_name == "architecture":
-                            revision_pass += 1
-                            label = "✅ Architecture blueprint ready" if revision_pass == 1 else f"🔁 Architecture revised (pass {revision_pass})"
-                            status.write(label)
-                        elif node_name == "critic":
-                            verdict = node_output.get("critic_verdict", {}).get("verdict", "?")
-                            status.write(f"🔍 Critic verdict: {verdict}")
-                        elif node_name == "diagram":
-                            status.write("✅ Diagram generated")
-
-                st.session_state.result = final_state
-                status.update(label="Design complete", state="complete")
-
+        with st.status("Processing your request...", expanded=False) as turn_status:
+            answer_text = _answer_user_message(user_input)
+            st.session_state.last_answer = answer_text
             save_chat_message(
-                st.session_state.session_id,
+                active_session_id,
+                USER_ID,
                 "assistant",
-                "Design generated: requirements, tech stack, architecture, and diagram are ready."
+                answer_text or "I do not have a direct answer for that request."
             )
-            # NOTE: verify this call against the actual signature of
-            # save_generated_blueprint_to_db in rag/ingest.py - the exact
-            # kwargs below are a best guess based on how it's named/imported.
-            try:
-                save_generated_blueprint_to_db(
-                    session_id=st.session_state.session_id,
-                    user_id=USER_ID,
-                    profile_id=PROFILE_ID,
-                    result=final_state,
-                )
-            except Exception as e:
-                st.warning(f"Design generated, but saving it to your blueprint history failed: {e}")
 
-            st.session_state.generate = False
-            st.session_state.pending_generate_prompt = None
-            st.session_state.preflight_result = None
-
-        elif st.session_state.pending_generate_prompt and is_negative(user_input):
-            st.session_state.pending_generate_prompt = None
-            st.session_state.preflight_result = {
-                "intent": "aborted",
-                "understanding": "Okay, I won't generate the design yet.",
-                "generate": False,
-                "question": "Tell me what you want changed or what you want me to do next.",
-            }
-            save_chat_message(
-                st.session_state.session_id,
-                "assistant",
-                "Okay, I won't generate the design yet. Tell me what you want changed or what you want me to do next."
-            )
-            st.session_state.result = _empty_design_result()
-
-        elif chat_mode == "Document Lookup" or (
-            chat_mode == "Auto" and _looks_like_document_lookup(user_input)
-        ):
-            with st.spinner("🔎 Searching attached documents..."):
-                lookup_sources = search_relevant_docs(
-                    user_input,
-                    limit=5,
-                    user_id=USER_ID,
-                    profile_id=PROFILE_ID,
-                )
-            st.session_state.lookup_result = {
-                "query": user_input,
-                "sources": lookup_sources,
-            }
-            save_chat_message(
-                st.session_state.session_id,
-                "assistant",
-                f"Searched attached documents for '{user_input}'. Found {len(lookup_sources)} matching document(s)."
-            )
-            st.session_state.result = _empty_design_result()
-
-        else:
-            with st.spinner("🧠 Understanding your request..."):
-                preflight = preflight_run(user_input)
-            st.session_state.preflight_result = preflight
-            st.session_state.pending_generate_prompt = user_input
-            st.session_state.generate = bool(preflight.get("generate", False))
-            assistant_msg = f"{preflight.get('understanding', '')}\n\n{preflight.get('question', '')}".strip()
-            save_chat_message(
-                st.session_state.session_id,
-                "assistant",
-                assistant_msg or "Understood your request."
-            )
-            st.session_state.result = _empty_design_result()
+            generation_prompt = _resolve_generation_prompt(user_input, fallback_prompt=previous_prompt)
+            if generation_prompt:
+                turn_status.update(label="Generating design...", state="running")
+                _run_design_generation(generation_prompt, status=turn_status)
+            else:
+                turn_status.update(label="Response ready", state="complete")
 
     res = st.session_state.result
-
-    if st.session_state.preflight_result:
-        preflight = st.session_state.preflight_result
-        with st.container(border=True):
-            st.markdown("### 🧠 Request Understanding")
-            st.write(preflight.get("understanding") or "I understand the request.")
-            question = preflight.get("question") or "Do you want me to generate the design now? (yes/no)"
-            st.info(question)
-            if st.session_state.pending_generate_prompt:
-                st.caption("Reply `yes` to generate, or `no` to keep refining the request.")
-
-    if st.session_state.lookup_result:
-        lookup_result = st.session_state.lookup_result
-        with st.container(border=True):
-            st.markdown("### 🔎 Document Lookup")
-            st.caption(f"Query: {lookup_result['query']}")
-            sources = lookup_result.get("sources") or []
-            if sources:
-                st.success(f"Found {len(sources)} matching document(s).")
-                for idx, doc in enumerate(sources, start=1):
-                    with st.expander(
-                        f"📄 [{idx}] {doc.get('title') or 'Untitled'} "
-                        f"(Similarity: {doc.get('similarity', 0.0):.4f})"
-                    ):
-                        st.caption(
-                            f"Source: {doc.get('source') or 'unknown'} | "
-                            f"Collection: {doc.get('collection') or 'unknown'}"
-                        )
-                        st.write(doc.get("content") or "")
-            else:
-                st.warning("No matching documents were found for that lookup.")
 
     # Display workspace output tabs if engine has executed successfully
     if res.get("requirements") or res.get("architecture"):
@@ -832,8 +765,7 @@ with col_workspace:
 
             problem_stmt = (
                 res.get("problem_statement")
-                or st.session_state.pending_generate_prompt
-                or (user_input if 'user_input' in locals() else None)
+                or st.session_state.last_user_prompt
             )
 
             if enable_rag and problem_stmt:
@@ -864,6 +796,104 @@ with col_workspace:
 
 # --- RIGHT PANEL STATUS COUNTERS ---
 with col_stats:
+    latest_prompt = (st.session_state.last_user_prompt or "").strip()
+    if st.button(
+        "Generate design",
+        key="generate_design_button",
+        use_container_width=True,
+        disabled=not bool(latest_prompt),
+    ):
+        if latest_prompt:
+            _run_design_generation(latest_prompt)
+        else:
+            st.warning("Ask a question first so I have a prompt to generate from.")
+
+    st.markdown("<div style='height:0.5rem;'></div>", unsafe_allow_html=True)
+    st.markdown(
+        f"""
+        <style>
+        .auth-card {{
+            display: flex;
+            align-items: center;
+            gap: 0.8rem;
+            width: 100%;
+            padding: 0.9rem 1rem;
+            border-radius: 16px;
+            border: 1px solid rgba(128, 128, 128, 0.22);
+            background: linear-gradient(135deg, rgba(17, 24, 39, 0.03), rgba(17, 24, 39, 0.06));
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.05);
+            margin-bottom: 0.9rem;
+            box-sizing: border-box;
+        }}
+        .auth-card__icon {{
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 2.5rem;
+            height: 2.5rem;
+            border-radius: 12px;
+            background: rgba(34, 197, 94, 0.12);
+            color: #16a34a;
+            font-size: 1.2rem;
+            flex: 0 0 auto;
+        }}
+        .auth-card__body {{
+            min-width: 0;
+            flex: 1 1 auto;
+        }}
+        .auth-card__label {{
+            font-size: 0.72rem;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: rgba(128, 128, 128, 0.9);
+            margin-bottom: 0.12rem;
+        }}
+        .auth-card__email {{
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: var(--text-color);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }}
+        .auth-card__subtle {{
+            font-size: 0.8rem;
+            color: rgba(128, 128, 128, 0.95);
+            margin-top: 0.15rem;
+        }}
+        @media (max-width: 640px) {{
+            .auth-card {{
+                padding: 0.8rem 0.85rem;
+                border-radius: 14px;
+                gap: 0.7rem;
+            }}
+            .auth-card__email {{
+                white-space: normal;
+                word-break: break-word;
+            }}
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f"""
+        <div class="auth-card">
+            <div class="auth-card__icon">👤</div>
+            <div class="auth-card__body">
+                <div class="auth-card__label">Account</div>
+                <div class="auth-card__email">{getattr(user, "email", "unknown")}</div>
+                <div class="auth-card__subtle">Signed in</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    if st.button("Logout", key="logout_right_panel"):
+        sign_out()
+        clear_auth_session()
+        st.rerun()
+
     st.markdown("### 📊 Status Check")
     res = st.session_state.result
 

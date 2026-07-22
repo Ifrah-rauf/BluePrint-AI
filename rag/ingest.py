@@ -93,7 +93,6 @@ def ingest_uploaded_files(
     user_id: str,
     profile_id: int,
     collection: str = USER_UPLOAD_COLLECTION,
-    session_id: str | None = None,
 ):
     """
     Ingest user-uploaded files into the same documents table for now,
@@ -109,81 +108,47 @@ def ingest_uploaded_files(
 
     supabase = get_supabase_client()
     embedding_model = get_embedding_model()
-    chunk_rows_to_insert: list[dict] = []
+    rows_to_insert: list[dict] = []
 
     for uploaded in uploaded_files:
         file_bytes = uploaded.getvalue()
         content = _extract_text_from_upload(uploaded.name, file_bytes)
         title = Path(uploaded.name).stem.replace("_", " ").replace("-", " ").strip().title()
         chunk_texts = chunk_text(content)
-        parent_metadata = {
-            "source_type": "upload",
-            "file_name": uploaded.name,
-            "mime_type": getattr(uploaded, "type", None),
-            "user_id": user_id,
-            "profile_id": profile_id,
-            "session_id": session_id,
-            "collection": collection,
-            "chunk_count": len(chunk_texts),
-        }
-        parent_row = {
-            "title": title,
-            "content": content,
-            "source": uploaded.name,
-            "collection": collection,
-            "chunk_index": 0,
-            "metadata": parent_metadata,
-            "embedding": embedding_model.encode(
-                f"Title: {title}\nContent: {content}"
-            ).tolist(),
-        }
-        parent_response = supabase.table("documents").insert(parent_row).execute()
-        inserted_parents = parent_response.data or []
-        parent_document_id = inserted_parents[0]["id"] if inserted_parents else None
-
         for chunk_index, chunk in enumerate(chunk_texts):
-            chunk_metadata = {
+            row_metadata = {
                 "source_type": "upload",
                 "file_name": uploaded.name,
                 "mime_type": getattr(uploaded, "type", None),
+                "auth_user_id": user_id,
                 "user_id": user_id,
                 "profile_id": profile_id,
-                "session_id": session_id,
                 "collection": collection,
-                "parent_title": title,
                 "chunk_count": len(chunk_texts),
             }
-            chunk_row = {
-                "document_id": parent_document_id,
-                "chunk_number": chunk_index,
-                "chunk_text": chunk,
-                "metadata": chunk_metadata,
+            row = {
+                "title": title,
+                "content": chunk,
+                "source": uploaded.name,
+                "collection": collection,
+                "user_id": profile_id,
+                "chunk_index": chunk_index,
+                "metadata": row_metadata,
                 "embedding": embedding_model.encode(
                     f"Title: {title}\nContent: {chunk}"
                 ).tolist(),
             }
-            chunk_rows_to_insert.append(chunk_row)
+            rows_to_insert.append(row)
 
-    if not chunk_rows_to_insert:
+    if not rows_to_insert:
         return []
 
-    # Best-effort mirror into document_chunks for the dedicated chunk store.
-    # We reuse the same chunk payload shape, then attach the parent document ID
-    # if Supabase returned it from the parent insert.
-    try:
-        supabase.table("document_chunks").insert(chunk_rows_to_insert).execute()
-        print(
-            f"Inserted {len(chunk_rows_to_insert)} chunk rows into document_chunks "
-            f"for user_id={user_id} and profile_id={profile_id}."
-        )
-    except Exception as e:
-        print(f"document_chunks insert failed, parent documents were still saved: {e}")
-
+    response = supabase.table("documents").insert(rows_to_insert).execute()
     print(
-        f"Inserted {len(uploaded_files)} uploaded parent document row(s) into Supabase "
+        f"Inserted {len(rows_to_insert)} uploaded document row(s) into Supabase "
         f"for user_id={user_id} and profile_id={profile_id}."
     )
-    return chunk_rows_to_insert
+    return response.data
 
 
 def insert_document_to_db(
@@ -241,8 +206,10 @@ def save_generated_blueprint_to_db(
             "content": content_summary[:4000],
             "source": "generated_blueprint",
             "collection": "generated_blueprints",
+            "user_id": profile_id,
             "chunk_index": 0,
             "metadata": {
+                "auth_user_id": user_id,
                 "user_id": user_id,
                 "profile_id": profile_id,
                 "source_type": "blueprint_generation",

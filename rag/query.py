@@ -7,21 +7,38 @@ from rag.core import get_embedding_model, get_supabase_client
 
 def _normalize_row(row: dict[str, Any]) -> dict[str, Any]:
     metadata = row.get("metadata") or {}
-    content = row.get("content") or row.get("chunk_text") or ""
-    chunk_number = row.get("chunk_number")
+    content = row.get("content") or ""
     return {
         "id": row.get("id"),
         "document_id": row.get("document_id"),
-        "title": row.get("title") or metadata.get("parent_title") or metadata.get("file_name"),
+        "title": row.get("title") or metadata.get("file_name") or metadata.get("source_path"),
         "content": content,
-        "chunk_text": row.get("chunk_text"),
         "source": row.get("source") or metadata.get("file_name") or metadata.get("source_path"),
         "collection": row.get("collection") or metadata.get("collection"),
         "metadata": metadata,
         "similarity": row.get("similarity", 0.0),
-        "chunk_number": chunk_number if chunk_number is not None else row.get("chunk_index"),
-        "chunk_index": row.get("chunk_index", chunk_number),
+        "chunk_index": row.get("chunk_index"),
     }
+
+
+def _row_matches_identity(
+    row: dict[str, Any],
+    user_id: str | None = None,
+    profile_id: int | None = None,
+    session_id: str | None = None,
+) -> bool:
+    metadata = row.get("metadata") or {}
+    row_profile_id = row.get("user_id") or metadata.get("profile_id")
+    row_auth_user_id = metadata.get("auth_user_id") or metadata.get("user_id")
+    row_session_id = metadata.get("session_id")
+
+    if user_id and str(row_auth_user_id) != str(user_id):
+        return False
+    if profile_id is not None and str(row_profile_id) != str(profile_id):
+        return False
+    if session_id and str(row_session_id) != str(session_id):
+        return False
+    return True
 
 
 def _keyword_fallback(user_query: str, limit: int) -> list[dict[str, Any]]:
@@ -55,9 +72,7 @@ def _fetch_session_rows(
     limit: int = 20,
 ) -> list[dict[str, Any]]:
     supabase = get_supabase_client()
-    select_columns = "id, title, content, source, collection, metadata, chunk_index"
-    if table_name == "document_chunks":
-        select_columns = "id, document_id, chunk_number, chunk_text, metadata, created_at"
+    select_columns = "id, title, content, source, collection, metadata, user_id, chunk_index"
 
     query = (
         supabase.table(table_name)
@@ -66,17 +81,15 @@ def _fetch_session_rows(
         .limit(limit)
     )
 
-    if collection and table_name != "document_chunks":
+    if collection:
         query = query.eq("collection", collection)
-    if user_id:
-        query = query.contains("metadata", {"user_id": user_id})
-    if profile_id is not None:
-        query = query.contains("metadata", {"profile_id": profile_id})
-    if session_id:
-        query = query.contains("metadata", {"session_id": session_id})
 
     response = query.execute()
-    return [_normalize_row(row) for row in (response.data or [])]
+    rows = [_normalize_row(row) for row in (response.data or [])]
+    return [
+        row for row in rows
+        if _row_matches_identity(row, user_id=user_id, profile_id=profile_id, session_id=session_id)
+    ]
 
 
 def fetch_attached_documents(
@@ -162,8 +175,6 @@ def _search_by_rpc_and_table(
     print(f"Searching {table_name} for: {user_query!r}")
     query_vector = embedding_model.encode(user_query).tolist()
     select_columns = "id, title, content, source, collection, metadata, chunk_index"
-    if table_name == "document_chunks":
-        select_columns = "id, document_id, chunk_number, chunk_text, metadata, created_at"
 
     try:
         rpc_payload = _build_rpc_payload(
@@ -195,14 +206,14 @@ def _search_by_rpc_and_table(
                 score = sum(1 for word in words if word in content)
                 if score:
                     normalized = _normalize_row({**row, "similarity": float(score)})
-                    metadata = normalized.get("metadata") or {}
                     if collection and normalized.get("collection") != collection:
                         continue
-                    if user_id and str(metadata.get("user_id")) != str(user_id):
-                        continue
-                    if profile_id is not None and str(metadata.get("profile_id")) != str(profile_id):
-                        continue
-                    if session_id and str(metadata.get("session_id")) != str(session_id):
+                    if not _row_matches_identity(
+                        normalized,
+                        user_id=user_id,
+                        profile_id=profile_id,
+                        session_id=session_id,
+                    ):
                         continue
                     ranked.append(normalized)
 
@@ -248,10 +259,8 @@ def search_relevant_chunks(
     profile_id: int | None = None,
     session_id: str | None = None,
 ):
-    return _search_by_rpc_and_table(
+    return search_relevant_docs(
         user_query=user_query,
-        table_name="document_chunks",
-        rpc_name="match_document_chunks",
         limit=limit,
         match_threshold=match_threshold,
         collection=collection,
@@ -320,13 +329,6 @@ def build_combined_rag_context(
         limit=20,
     )
 
-    user_chunks = _fetch_session_rows(
-        table_name="document_chunks",
-        user_id=user_id,
-        profile_id=profile_id,
-        limit=20,
-    )
-
     global_context = build_rag_context(
         user_query=user_query,
         limit=limit,
@@ -339,8 +341,6 @@ def build_combined_rag_context(
         blocks.append("Global Context:\n" + global_context)
     if user_documents:
         blocks.append("User Uploaded Files:\n" + format_retrieved_docs(user_documents))
-    if user_chunks:
-        blocks.append("User Uploaded Chunks:\n" + format_retrieved_docs(user_chunks))
 
     semantic_upload_context = build_rag_context(
         user_query=user_query,
@@ -365,13 +365,15 @@ def fetch_recent_blueprints(
     limit: int = 10,
 ) -> list[dict[str, Any]]:
     """
-    Fetch recent generated blueprints and uploaded document titles directly from the Supabase documents table.
+    Fetch recent generated blueprints directly from the Supabase documents table
+    for the current authenticated user/profile.
     """
     supabase = get_supabase_client()
     try:
         response = (
             supabase.table("documents")
-            .select("id, title, source, collection, created_at, metadata")
+            .select("id, title, source, collection, created_at, metadata, user_id")
+            .eq("collection", "generated_blueprints")
             .order("created_at", desc=True)
             .limit(100)
             .execute()
@@ -383,12 +385,13 @@ def fetch_recent_blueprints(
 
         for row in rows:
             metadata = row.get("metadata") or {}
+            row_profile_id = row.get("user_id") or metadata.get("profile_id")
+            row_auth_user_id = metadata.get("auth_user_id") or metadata.get("user_id")
 
-            # Match user filtering if specified
-            if user_id is not None:
-                row_uid = str(row.get("user_id") or metadata.get("user_id") or "")
-                if row_uid and row_uid != "0" and row_uid != str(user_id):
-                    continue
+            if profile_id is not None and str(row_profile_id) != str(profile_id):
+                continue
+            if user_id is not None and str(row_auth_user_id) != str(user_id):
+                continue
 
             title = (
                 row.get("title")
@@ -405,6 +408,7 @@ def fetch_recent_blueprints(
                     "collection": row.get("collection"),
                     "created_at": row.get("created_at"),
                     "source": row.get("source"),
+                    "user_id": row_profile_id,
                     "metadata": metadata,
                 })
                 if len(blueprints) >= limit:
@@ -418,7 +422,7 @@ def fetch_recent_blueprints(
 
 def ensure_chat_session(
     session_id: str,
-    user_id: str = "525b14c4-5ed8-4088-891e-455df5159bb8",
+    user_id: str,
     title: str = "Architecture Design Session",
 ):
     """
@@ -438,13 +442,41 @@ def ensure_chat_session(
         print(f"Note on ensure_chat_session: {e}")
 
 
-def save_chat_message(session_id: str, role: str, message: str) -> dict[str, Any] | None:
+def save_chat_message(
+    session_id: str,
+    user_id: str,
+    role: str,
+    message: str,
+    title: str = "Architecture Design Session",
+) -> dict[str, Any] | None:
     """
     Save a chat message (user or assistant) into the public.chat_messages table in Supabase.
     """
     supabase = get_supabase_client()
     try:
-        ensure_chat_session(session_id)
+        ensure_chat_session(session_id, user_id=user_id, title=title)
+
+        if role == "user":
+            session_title = (message or "").strip()
+            if session_title:
+                session_title = session_title[:80]
+                try:
+                    current_session = (
+                        supabase.table("chat_sessions")
+                        .select("title")
+                        .eq("id", session_id)
+                        .execute()
+                    )
+                    current_title = None
+                    if current_session.data:
+                        current_title = current_session.data[0].get("title")
+                    if not current_title or current_title == title:
+                        supabase.table("chat_sessions").update({
+                            "title": session_title,
+                        }).eq("id", session_id).execute()
+                except Exception as title_error:
+                    print(f"Failed to update chat session title: {title_error}")
+
         res = supabase.table("chat_messages").insert({
             "session_id": session_id,
             "role": role,
@@ -457,13 +489,35 @@ def save_chat_message(session_id: str, role: str, message: str) -> dict[str, Any
         return None
 
 
+def fetch_chat_sessions(
+    user_id: str,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    """
+    Fetch saved chat sessions for the current authenticated user.
+    """
+    supabase = get_supabase_client()
+    try:
+        res = (
+            supabase.table("chat_sessions")
+            .select("id, user_id, title, created_at")
+            .eq("user_id", user_id)
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return res.data or []
+    except Exception as e:
+        print(f"Failed to fetch chat sessions from Supabase: {e}")
+        return []
+
+
 def fetch_chat_messages(session_id: str) -> list[dict[str, Any]]:
     """
     Fetch all chat messages for a specific session_id from public.chat_messages ordered by created_at.
     """
     supabase = get_supabase_client()
     try:
-        ensure_chat_session(session_id)
         res = (
             supabase.table("chat_messages")
             .select("id, session_id, role, message, created_at")
@@ -475,5 +529,3 @@ def fetch_chat_messages(session_id: str) -> list[dict[str, Any]]:
     except Exception as e:
         print(f"Failed to fetch chat messages from Supabase: {e}")
         return []
-
-
