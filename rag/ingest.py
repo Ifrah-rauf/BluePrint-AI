@@ -7,8 +7,6 @@ from pathlib import Path
 from rag.core import (
     DEFAULT_COLLECTION,
     ROOT_DIR,
-    STATIC_PROFILE_ID,
-    STATIC_USER_ID,  # static uid
     USER_UPLOAD_COLLECTION,
     build_document_rows,
     get_embedding_model,
@@ -93,8 +91,8 @@ def ingest_knowledge_base(
 def ingest_uploaded_files(
     uploaded_files,
     collection: str = USER_UPLOAD_COLLECTION,
-    user_id: str = STATIC_USER_ID,  # static uid
-    profile_id: int = STATIC_PROFILE_ID,
+    user_id: str | None = None,
+    profile_id: int | None = None,
     session_id: str | None = None,
 ):
     """
@@ -103,6 +101,11 @@ def ingest_uploaded_files(
     """
     if not uploaded_files:
         return []
+
+    if not user_id or profile_id is None:
+        raise ValueError(
+            "Authenticated user_id and profile_id are required"
+        )
 
     supabase = get_supabase_client()
     embedding_model = get_embedding_model()

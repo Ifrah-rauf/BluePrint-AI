@@ -4,11 +4,21 @@ load_dotenv()
 
 import streamlit as st
 
-# --- STREAMLIT PAGE CONFIG (Must be the very first Streamlit command) ---
-st.set_page_config(page_title="BluePrint-AI Workplace", layout="wide", initial_sidebar_state="expanded")
-
 # 2. Import regular libraries
 from tools.diagram_renderer import render_mermaid_chart
+from auth.auth import (
+    sign_in,
+    sign_up,
+    sign_out,
+    get_profile,
+)
+from auth.session import (
+    set_auth_user,
+    get_auth_user,
+    get_profile as session_profile,
+    clear_auth_session,
+    is_authenticated,
+)
 from llm_client import stream_llm
 from rag.query import (
     fetch_attached_documents,
@@ -18,11 +28,117 @@ from rag.query import (
     fetch_chat_messages,
 )
 from rag.ingest import ingest_uploaded_files, save_generated_blueprint_to_db
-from rag.core import STATIC_USER_ID, STATIC_PROFILE_ID  # static uid
+from rag.core import STATIC_USER_ID, STATIC_PROFILE_ID  # noqa: F401 - kept for reference/fallback only
 from graph import generate_design, generate_design_stream
 from state import DesignState
 from agents.intent_agent import preflight_run, is_affirmative, is_negative
 from uuid import uuid4
+
+# --- STREAMLIT PAGE CONFIG (Must be the very first Streamlit command) ---
+st.set_page_config(page_title="BluePrint-AI Workplace", layout="wide", initial_sidebar_state="expanded")
+
+if not is_authenticated():
+
+    st.title("🔐 BluePrint-AI Login")
+
+    tab1, tab2 = st.tabs(
+        ["Login", "Create Account"]
+    )
+
+    with tab1:
+        email = st.text_input(
+            "Email",
+            key="login_email"
+        )
+
+        password = st.text_input(
+            "Password",
+            type="password",
+            key="login_password"
+        )
+
+        if st.button("Login"):
+
+            try:
+                response = sign_in(
+                    email,
+                    password
+                )
+
+                user = response.user
+
+                profile_response = get_profile(
+                    user.id
+                )
+
+                set_auth_user(
+                    user,
+                    profile_response.data
+                )
+
+                st.success(
+                    "Login successful"
+                )
+
+                st.rerun()
+
+            except Exception as e:
+                st.error(str(e))
+
+
+    with tab2:
+
+        email = st.text_input(
+            "Email",
+            key="signup_email"
+        )
+
+        password = st.text_input(
+            "Password",
+            type="password",
+            key="signup_password"
+        )
+
+        full_name = st.text_input(
+            "Full Name"
+        )
+
+        organization = st.text_input(
+            "Organization"
+        )
+
+
+        if st.button("Create Account"):
+
+            try:
+
+                sign_up(
+                    email,
+                    password,
+                    full_name,
+                    organization
+                )
+
+                st.success(
+                    "Account created. Check email if confirmation is enabled."
+                )
+
+            except Exception as e:
+                st.error(str(e))
+
+
+    st.stop()
+
+user = get_auth_user()
+profile = session_profile()
+
+if user is None or profile is None:
+    st.error("Authentication session expired.")
+    clear_auth_session()
+    st.stop()
+
+USER_ID = user.id
+PROFILE_ID = profile["profile_id"]
 
 
 def _empty_design_result() -> dict:
@@ -228,8 +344,8 @@ if "session_id" not in st.session_state:
 attachment_lookup_error = None
 try:
     attached_documents = fetch_attached_documents(
-        STATIC_USER_ID,  # static uid
-        STATIC_PROFILE_ID,
+        USER_ID,
+        PROFILE_ID,
     )
 except Exception as e:
     attached_documents = []
@@ -269,6 +385,11 @@ with st.sidebar:
     if uploaded_files:
         st.session_state.uploaded_files = uploaded_files
 
+    if st.button("Logout"):
+        sign_out()
+        clear_auth_session()
+        st.rerun()
+
     pending_files = []
     if st.session_state.uploaded_files:
         pending_files = [
@@ -282,8 +403,8 @@ with st.sidebar:
                 try:
                     ingest_uploaded_files(
                         pending_files,
-                        user_id=STATIC_USER_ID,  # static uid
-                        profile_id=STATIC_PROFILE_ID,
+                        user_id=USER_ID,
+                        profile_id=PROFILE_ID,
                         session_id=st.session_state.session_id,
                     )
                     st.session_state.upload_message = (
@@ -329,8 +450,8 @@ with st.sidebar:
     st.markdown("### 🕒 Recent Blueprints")
     try:
         recent_blueprints = fetch_recent_blueprints(
-            user_id=STATIC_USER_ID,
-            profile_id=STATIC_PROFILE_ID,
+            user_id=USER_ID,
+            profile_id=PROFILE_ID,
             limit=5,
         )
     except Exception as e:
@@ -343,8 +464,6 @@ with st.sidebar:
         st.caption("No saved blueprints found in Supabase database.")
 
 # --- MAIN CONTENT LAYOUT (Center & Right Panel) ---
-# Heading now uses a dedicated class instead of inline style + !important,
-# so it can't be silently re-targeted/overridden by the global font reset.
 st.markdown("""
 <div class="hero-title">
     <img class="hero-title-icon" src="https://cdn-icons-png.flaticon.com/512/2103/2103633.png">
@@ -380,6 +499,7 @@ with col_workspace:
     user_input = st.chat_input(chat_placeholder)
 
     if user_input:
+        st.session_state.last_query = user_input
         st.session_state.lookup_result = None
         # Save user message to Supabase
         save_chat_message(st.session_state.session_id, "user", user_input)
@@ -391,8 +511,8 @@ with col_workspace:
                 revision_pass = 0
                 for update in generate_design_stream(
                     user_input,
-                    user_id=STATIC_USER_ID,
-                    profile_id=STATIC_PROFILE_ID,
+                    user_id=USER_ID,
+                    profile_id=PROFILE_ID,
                     session_id=st.session_state.session_id,
                 ):
                     for node_name, node_output in update.items():
@@ -413,23 +533,44 @@ with col_workspace:
 
                 st.session_state.result = final_state
                 status.update(label="Design complete", state="complete")
+
+            save_chat_message(
+                st.session_state.session_id,
+                "assistant",
+                "Design generated: requirements, tech stack, architecture, and diagram are ready."
+            )
+            # NOTE: verify this call against the actual signature of
+            # save_generated_blueprint_to_db in rag/ingest.py - the exact
+            # kwargs below are a best guess based on how it's named/imported.
+            try:
+                save_generated_blueprint_to_db(
+                    session_id=st.session_state.session_id,
+                    user_id=USER_ID,
+                    profile_id=PROFILE_ID,
+                    result=final_state,
+                )
+            except Exception as e:
+                st.warning(f"Design generated, but saving it to your blueprint history failed: {e}")
+
             st.session_state.generate = False
             st.session_state.pending_generate_prompt = None
             st.session_state.preflight_result = None
+
         elif st.session_state.pending_generate_prompt and is_negative(user_input):
             st.session_state.pending_generate_prompt = None
             st.session_state.preflight_result = {
                 "intent": "aborted",
-                "understanding": "Okay, I won’t generate the design yet.",
+                "understanding": "Okay, I won't generate the design yet.",
                 "generate": False,
                 "question": "Tell me what you want changed or what you want me to do next.",
             }
             save_chat_message(
                 st.session_state.session_id,
                 "assistant",
-                "Okay, I won’t generate the design yet. Tell me what you want changed or what you want me to do next."
+                "Okay, I won't generate the design yet. Tell me what you want changed or what you want me to do next."
             )
             st.session_state.result = _empty_design_result()
+
         elif chat_mode == "Document Lookup" or (
             chat_mode == "Auto" and _looks_like_document_lookup(user_input)
         ):
@@ -437,8 +578,8 @@ with col_workspace:
                 lookup_sources = search_relevant_docs(
                     user_input,
                     limit=5,
-                    user_id=STATIC_USER_ID,  # static uid
-                    profile_id=STATIC_PROFILE_ID,
+                    user_id=USER_ID,
+                    profile_id=PROFILE_ID,
                 )
             st.session_state.lookup_result = {
                 "query": user_input,
@@ -450,38 +591,20 @@ with col_workspace:
                 f"Searched attached documents for '{user_input}'. Found {len(lookup_sources)} matching document(s)."
             )
             st.session_state.result = _empty_design_result()
+
         else:
-            if chat_mode == "Document Lookup":
-                with st.spinner("🔎 Searching attached documents..."):
-                    lookup_sources = search_relevant_docs(
-                        user_input,
-                        limit=5,
-                        user_id=STATIC_USER_ID,  # static uid
-                        profile_id=STATIC_PROFILE_ID,
-                    )
-                st.session_state.lookup_result = {
-                    "query": user_input,
-                    "sources": lookup_sources,
-                }
-                save_chat_message(
-                    st.session_state.session_id,
-                    "assistant",
-                    f"Searched attached documents for '{user_input}'. Found {len(lookup_sources)} matching document(s)."
-                )
-                st.session_state.result = _empty_design_result()
-            else:
-                with st.spinner("🧠 Understanding your request..."):
-                    preflight = preflight_run(user_input)
-                st.session_state.preflight_result = preflight
-                st.session_state.pending_generate_prompt = user_input
-                st.session_state.generate = bool(preflight.get("generate", False))
-                assistant_msg = f"{preflight.get('understanding', '')}\n\n{preflight.get('question', '')}".strip()
-                save_chat_message(
-                    st.session_state.session_id,
-                    "assistant",
-                    assistant_msg or "Understood your request."
-                )
-                st.session_state.result = _empty_design_result()
+            with st.spinner("🧠 Understanding your request..."):
+                preflight = preflight_run(user_input)
+            st.session_state.preflight_result = preflight
+            st.session_state.pending_generate_prompt = user_input
+            st.session_state.generate = bool(preflight.get("generate", False))
+            assistant_msg = f"{preflight.get('understanding', '')}\n\n{preflight.get('question', '')}".strip()
+            save_chat_message(
+                st.session_state.session_id,
+                "assistant",
+                assistant_msg or "Understood your request."
+            )
+            st.session_state.result = _empty_design_result()
 
     res = st.session_state.result
 
@@ -623,14 +746,6 @@ with col_workspace:
 
                 with st.container(border=True):
                     render_mermaid_chart(diagram, height=450)
-            # diagram = """
-            # graph TD
-            # A[Frontend] --> B[API Gateway]
-            # B --> C[Backend]
-            # C --> D[Database]
-            # """
-            # with st.container(border=True):
-            #     render_mermaid_chart(diagram,height=450)
             else:
                 st.info("No active diagram matrix generated for this workflow task yet.")
             st.caption("💡 Tip: This visual blueprint updates dynamically based on consensus architectural constraints.")
@@ -649,9 +764,9 @@ with col_workspace:
                 with st.spinner("📚 Fetching semantic grounding vectors from Supabase..."):
                     fetched_sources = search_relevant_docs(
                         problem_stmt,
-                        limit=5,
-                        user_id=STATIC_USER_ID,
-                        profile_id=STATIC_PROFILE_ID,
+                        limit=3,
+                        user_id=USER_ID,
+                        profile_id=PROFILE_ID,
                     )
 
                 if fetched_sources:
