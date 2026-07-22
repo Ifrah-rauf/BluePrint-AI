@@ -25,6 +25,8 @@ def get_profile():
 def clear_auth_session():
     st.session_state.pop("auth_user", None)
     st.session_state.pop("profile", None)
+    st.session_state.pop("auth_restore_attempted", None)
+    st.session_state.pop("auth_restore_retry_pending", None)
 
 
 def is_authenticated():
