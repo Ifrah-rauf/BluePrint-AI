@@ -70,5 +70,27 @@ def generate_design(
     print(result["diagram"])
     return result
 
+def generate_design_stream(
+    problem_statement: str,
+    user_id: str | None = None,
+    profile_id: int | None = None,
+    session_id: str | None = None,
+):
+    """
+    Yields one update per node completion: {node_name: {partial state dict}}.
+    Use this from Streamlit to render progress as each agent finishes.
+    """
+    yield from compiled_graph.stream(
+        {
+            "problem_statement": problem_statement,
+            "critic_history": [],
+            "revision_count": 0,
+            "user_id": user_id,
+            "profile_id": profile_id,
+            "session_id": session_id,
+        },
+        stream_mode="updates",
+    )
+
 if __name__ == "__main__":
     generate_design("notes app")

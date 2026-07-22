@@ -357,3 +357,123 @@ def build_combined_rag_context(
         return "No relevant retrieved documents."
 
     return "\n\n".join(blocks)
+
+
+def fetch_recent_blueprints(
+    user_id: str | int | None = None,
+    profile_id: int | None = None,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    """
+    Fetch recent generated blueprints and uploaded document titles directly from the Supabase documents table.
+    """
+    supabase = get_supabase_client()
+    try:
+        response = (
+            supabase.table("documents")
+            .select("id, title, source, collection, created_at, metadata")
+            .order("created_at", desc=True)
+            .limit(100)
+            .execute()
+        )
+        rows = response.data or []
+
+        blueprints: list[dict[str, Any]] = []
+        seen_titles: set[str] = set()
+
+        for row in rows:
+            metadata = row.get("metadata") or {}
+
+            # Match user filtering if specified
+            if user_id is not None:
+                row_uid = str(row.get("user_id") or metadata.get("user_id") or "")
+                if row_uid and row_uid != "0" and row_uid != str(user_id):
+                    continue
+
+            title = (
+                row.get("title")
+                or metadata.get("file_name")
+                or row.get("source")
+                or "Untitled Blueprint"
+            ).strip()
+
+            if title and title not in seen_titles:
+                seen_titles.add(title)
+                blueprints.append({
+                    "id": row.get("id"),
+                    "title": title,
+                    "collection": row.get("collection"),
+                    "created_at": row.get("created_at"),
+                    "source": row.get("source"),
+                    "metadata": metadata,
+                })
+                if len(blueprints) >= limit:
+                    break
+
+        return blueprints
+    except Exception as e:
+        print(f"Error fetching recent blueprints from Supabase: {e}")
+        return []
+
+
+def ensure_chat_session(
+    session_id: str,
+    user_id: str = "525b14c4-5ed8-4088-891e-455df5159bb8",
+    title: str = "Architecture Design Session",
+):
+    """
+    Ensure that a chat session record exists in the public.chat_sessions table.
+    """
+    supabase = get_supabase_client()
+    try:
+        res = supabase.table("chat_sessions").select("id").eq("id", session_id).execute()
+        if not res.data:
+            supabase.table("chat_sessions").insert({
+                "id": session_id,
+                "user_id": user_id,
+                "title": title,
+            }).execute()
+            print(f"Created new chat_session {session_id} in Supabase.")
+    except Exception as e:
+        print(f"Note on ensure_chat_session: {e}")
+
+
+def save_chat_message(session_id: str, role: str, message: str) -> dict[str, Any] | None:
+    """
+    Save a chat message (user or assistant) into the public.chat_messages table in Supabase.
+    """
+    supabase = get_supabase_client()
+    try:
+        ensure_chat_session(session_id)
+        res = supabase.table("chat_messages").insert({
+            "session_id": session_id,
+            "role": role,
+            "message": message,
+        }).execute()
+        print(f"Saved {role} chat message to Supabase chat_messages.")
+        return res.data[0] if res.data else None
+    except Exception as e:
+        print(f"Failed to save chat message to Supabase: {e}")
+        return None
+
+
+def fetch_chat_messages(session_id: str) -> list[dict[str, Any]]:
+    """
+    Fetch all chat messages for a specific session_id from public.chat_messages ordered by created_at.
+    """
+    supabase = get_supabase_client()
+    try:
+        ensure_chat_session(session_id)
+        res = (
+            supabase.table("chat_messages")
+            .select("id, session_id, role, message, created_at")
+            .eq("session_id", session_id)
+            .order("created_at", asc=True)
+            .execute()
+        )
+        return res.data or []
+    except Exception as e:
+        print(f"Failed to fetch chat messages from Supabase: {e}")
+        return []
+
+

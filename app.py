@@ -9,10 +9,17 @@ st.set_page_config(page_title="BluePrint-AI Workplace", layout="wide", initial_s
 
 # 2. Import regular libraries
 from tools.diagram_renderer import render_mermaid_chart
-from rag.query import fetch_attached_documents, search_relevant_docs
-from rag.ingest import ingest_uploaded_files
+from llm_client import stream_llm
+from rag.query import (
+    fetch_attached_documents,
+    search_relevant_docs,
+    fetch_recent_blueprints,
+    save_chat_message,
+    fetch_chat_messages,
+)
+from rag.ingest import ingest_uploaded_files, save_generated_blueprint_to_db
 from rag.core import STATIC_USER_ID, STATIC_PROFILE_ID  # static uid
-from graph import generate_design
+from graph import generate_design, generate_design_stream
 from state import DesignState
 from agents.intent_agent import preflight_run, is_affirmative, is_negative
 from uuid import uuid4
@@ -82,7 +89,7 @@ def _looks_like_document_lookup(user_input: str) -> bool:
 
     return action_hits > 0 and target_hits > 0 and design_hits == 0
 
-# 3. Premium Styling & Fine-tuned Font Sizes
+# 3. Dynamic & Theme-Aware Styling
 st.markdown("""
 <style>
 /* Global Font Tuning (Except main H1 title) */
@@ -90,11 +97,7 @@ html, body, [class*="css"], .stMarkdown p, li, span, label {
     font-size: 0.92rem !important;
 }
 
-/* Exempt the hero heading (and everything inside it) from the reset above.
-   This is what was silently overriding your 3.5rem heading: Streamlit can
-   re-wrap the trailing text node next to your <img> in its own <p>/<span>,
-   which matches the catch-all rule directly (not by inheritance), so the
-   div's inline font-size no longer applied to it. */
+/* Exempt the hero heading from the global reset */
 .hero-title, .hero-title * {
     font-size: initial !important;
 }
@@ -110,59 +113,71 @@ header[data-testid="stHeader"], [data-testid="stToolbar"], #MainMenu {
     display:none;
 }
 
-/* Whole Application Background & Dot Grid */
+/* Dynamic App Background & Subtle Radial Grid */
 .stApp, [data-testid="stAppViewContainer"] {
-    background-color: #FCFCFD;
+    background-color: var(--background-color);
     background-image:
-        radial-gradient(circle, rgba(0,0,0,0.04) 1px, transparent 1px),
+        radial-gradient(circle, rgba(128,128,128,0.08) 1px, transparent 1px),
         radial-gradient(circle at 15% 20%, rgba(124,58,237,0.06), transparent 22%),
         radial-gradient(circle at 82% 18%, rgba(59,130,246,0.05), transparent 25%),
         radial-gradient(circle at 70% 82%, rgba(250,204,21,0.04), transparent 22%);
     background-size: 22px 22px, auto, auto, auto;
+    color: var(--text-color);
 }
 
-/* Glass Sidebar */
+/* Glass & Theme-Aware Sidebar */
 [data-testid="stSidebar"] {
-    background: rgba(255,255,255,0.45);
-    backdrop-filter: blur(18px);
-    -webkit-backdrop-filter: blur(18px);
-    border-right: 1px solid rgba(0,0,0,.05);
+    background-color: var(--secondary-background-color);
+    border-right: 1px solid rgba(128, 128, 128, 0.15);
 }
 
 .block-container { padding-top: 2rem; }
-.stTabs { background: rgba(255,255,255,.4); border-radius: 12px; padding: 10px; }
-.streamlit-expanderHeader { background: rgba(255,255,255,.5); }
-[data-testid="stChatInput"] { background: rgba(255,255,255,.7); backdrop-filter: blur(15px); }
+.stTabs {
+    background: var(--secondary-background-color);
+    border-radius: 12px;
+    padding: 10px;
+    border: 1px solid rgba(128, 128, 128, 0.15);
+}
+.streamlit-expanderHeader {
+    background: var(--secondary-background-color);
+    border-radius: 6px;
+}
+[data-testid="stChatInput"] {
+    background: var(--secondary-background-color);
+    border-radius: 8px;
+}
 
-/* Premium Custom UI Components */
+/* Theme-Aware Custom UI Components */
 .spec-card {
-    background: #ffffff;
+    background: var(--secondary-background-color);
     padding: 16px;
     border-radius: 8px;
-    border: 1px solid #E4E7EC;
-    box-shadow: 0 1px 3px rgba(16, 24, 40, 0.05);
+    border: 1px solid rgba(128, 128, 128, 0.18);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
     margin-bottom: 12px;
+    color: var(--text-color);
 }
 .tech-tag {
     display: inline-block;
-    background: #F2F4F7;
-    color: #344054;
+    background: var(--secondary-background-color);
+    color: var(--text-color);
     padding: 4px 10px;
     border-radius: 6px;
     font-weight: 500;
     font-size: 0.82rem !important;
     margin: 4px;
-    border: 1px solid #D0D5DD;
+    border: 1px solid rgba(128, 128, 128, 0.25);
 }
 .critic-box {
-    background: #FFF9F5;
+    background: rgba(253, 133, 58, 0.08);
     border-left: 4px solid #FD853A;
     padding: 12px;
     border-radius: 0 8px 8px 0;
     margin-bottom: 10px;
+    color: var(--text-color);
 }
 
-/* --- Hero title (dedicated, robust rule instead of inline styling) --- */
+/* --- Hero title --- */
 .hero-title {
     display: flex !important;
     align-items: center !important;
@@ -179,7 +194,7 @@ header[data-testid="stHeader"], [data-testid="stToolbar"], #MainMenu {
     font-weight: 800 !important;
     letter-spacing: -0.06rem !important;
     line-height: 1.2 !important;
-    color: #101828 !important;
+    color: var(--text-color) !important;
     font-family: sans-serif !important;
 }
 </style>
@@ -312,8 +327,20 @@ with st.sidebar:
     st.divider()
 
     st.markdown("### 🕒 Recent Blueprints")
-    st.caption("💬 Design a scalable URL shortener")
-    st.caption("💬 Notification engine for 10M users")
+    try:
+        recent_blueprints = fetch_recent_blueprints(
+            user_id=STATIC_USER_ID,
+            profile_id=STATIC_PROFILE_ID,
+            limit=5,
+        )
+    except Exception as e:
+        recent_blueprints = []
+
+    if recent_blueprints:
+        for bp in recent_blueprints:
+            st.caption(f"💬 {bp['title']}")
+    else:
+        st.caption("No saved blueprints found in Supabase database.")
 
 # --- MAIN CONTENT LAYOUT (Center & Right Panel) ---
 # Heading now uses a dedicated class instead of inline style + !important,
@@ -337,6 +364,14 @@ if st.session_state.uploaded_files:
 col_workspace, col_stats = st.columns([3, 1], gap="medium")
 
 with col_workspace:
+    # --- PERSISTENT CHAT HISTORY DISPLAY ---
+    chat_history = fetch_chat_messages(st.session_state.session_id)
+    if chat_history:
+        with st.expander("💬 Conversation History", expanded=True):
+            for msg in chat_history:
+                with st.chat_message(msg.get("role", "user")):
+                    st.write(msg.get("message", ""))
+
     if st.session_state.pending_generate_prompt:
         chat_placeholder = "Reply yes to generate the design, or no to stay in understanding mode..."
     else:
@@ -346,16 +381,38 @@ with col_workspace:
 
     if user_input:
         st.session_state.lookup_result = None
+        # Save user message to Supabase
+        save_chat_message(st.session_state.session_id, "user", user_input)
 
         if st.session_state.pending_generate_prompt and is_affirmative(user_input):
             st.session_state.generate = True
-            with st.spinner("🤖 Multi-agent consensus pipeline running..."):
-                st.session_state.result = generate_design(
-                    st.session_state.pending_generate_prompt,
-                    user_id=STATIC_USER_ID,  # static uid
+            with st.status("Running multi-agent pipeline...", expanded=True) as status:
+                final_state = _empty_design_result()
+                revision_pass = 0
+                for update in generate_design_stream(
+                    user_input,
+                    user_id=STATIC_USER_ID,
                     profile_id=STATIC_PROFILE_ID,
                     session_id=st.session_state.session_id,
-                )
+                ):
+                    for node_name, node_output in update.items():
+                        final_state.update(node_output)
+                        if node_name == "requirements":
+                            status.write("✅ Requirements drafted")
+                        elif node_name == "techstack":
+                            status.write("✅ Tech stack chosen")
+                        elif node_name == "architecture":
+                            revision_pass += 1
+                            label = "✅ Architecture blueprint ready" if revision_pass == 1 else f"🔁 Architecture revised (pass {revision_pass})"
+                            status.write(label)
+                        elif node_name == "critic":
+                            verdict = node_output.get("critic_verdict", {}).get("verdict", "?")
+                            status.write(f"🔍 Critic verdict: {verdict}")
+                        elif node_name == "diagram":
+                            status.write("✅ Diagram generated")
+
+                st.session_state.result = final_state
+                status.update(label="Design complete", state="complete")
             st.session_state.generate = False
             st.session_state.pending_generate_prompt = None
             st.session_state.preflight_result = None
@@ -367,6 +424,11 @@ with col_workspace:
                 "generate": False,
                 "question": "Tell me what you want changed or what you want me to do next.",
             }
+            save_chat_message(
+                st.session_state.session_id,
+                "assistant",
+                "Okay, I won’t generate the design yet. Tell me what you want changed or what you want me to do next."
+            )
             st.session_state.result = _empty_design_result()
         elif chat_mode == "Document Lookup" or (
             chat_mode == "Auto" and _looks_like_document_lookup(user_input)
@@ -382,6 +444,11 @@ with col_workspace:
                 "query": user_input,
                 "sources": lookup_sources,
             }
+            save_chat_message(
+                st.session_state.session_id,
+                "assistant",
+                f"Searched attached documents for '{user_input}'. Found {len(lookup_sources)} matching document(s)."
+            )
             st.session_state.result = _empty_design_result()
         else:
             if chat_mode == "Document Lookup":
@@ -396,6 +463,11 @@ with col_workspace:
                     "query": user_input,
                     "sources": lookup_sources,
                 }
+                save_chat_message(
+                    st.session_state.session_id,
+                    "assistant",
+                    f"Searched attached documents for '{user_input}'. Found {len(lookup_sources)} matching document(s)."
+                )
                 st.session_state.result = _empty_design_result()
             else:
                 with st.spinner("🧠 Understanding your request..."):
@@ -403,6 +475,12 @@ with col_workspace:
                 st.session_state.preflight_result = preflight
                 st.session_state.pending_generate_prompt = user_input
                 st.session_state.generate = bool(preflight.get("generate", False))
+                assistant_msg = f"{preflight.get('understanding', '')}\n\n{preflight.get('question', '')}".strip()
+                save_chat_message(
+                    st.session_state.session_id,
+                    "assistant",
+                    assistant_msg or "Understood your request."
+                )
                 st.session_state.result = _empty_design_result()
 
     res = st.session_state.result
@@ -558,21 +636,40 @@ with col_workspace:
             st.caption("💡 Tip: This visual blueprint updates dynamically based on consensus architectural constraints.")
 
         with tab_rag:
-            st.markdown("### Database Context Matches (Supabase pgvector)")
-            if enable_rag and user_input:
+            st.markdown("### 📚 Grounded Context & Source Transparency")
+            st.caption("The vector chunks below were retrieved from Supabase `pgvector` and supplied to the agents as grounded context:")
+
+            problem_stmt = (
+                res.get("problem_statement")
+                or st.session_state.pending_generate_prompt
+                or (user_input if 'user_input' in locals() else None)
+            )
+
+            if enable_rag and problem_stmt:
                 with st.spinner("📚 Fetching semantic grounding vectors from Supabase..."):
-                    fetched_sources = search_relevant_docs(user_input, limit=3)
+                    fetched_sources = search_relevant_docs(
+                        problem_stmt,
+                        limit=5,
+                        user_id=STATIC_USER_ID,
+                        profile_id=STATIC_PROFILE_ID,
+                    )
 
                 if fetched_sources:
-                    st.success(f"🎯 Retrieved {len(fetched_sources)} highly similar blueprint records!")
+                    st.success(f"🎯 Grounded across {len(fetched_sources)} relevant reference chunk(s):")
                     for idx, doc in enumerate(fetched_sources, start=1):
-                        with st.expander(f"📄 [{idx}] {doc['title']} (Similarity: {doc['similarity']:.4f})"):
-                            st.caption(f"📍 Source: {doc['source']} | Collection: {doc['collection']}")
-                            st.write(doc['content'])
+                        title = doc.get("title") or "Untitled Chunk"
+                        sim = doc.get("similarity", 0.0)
+                        sim_pct = f"{sim * 100:.1f}% match"
+                        coll = doc.get("collection") or "unknown"
+                        src = doc.get("source") or "unknown"
+
+                        with st.expander(f"📄 [{idx}] {title} — `{sim_pct}`"):
+                            st.caption(f"📍 Collection: `{coll}` | Source: `{src}`")
+                            st.markdown(f"```text\n{doc.get('content', '')}\n```")
                 else:
-                    st.warning("⚠️ No matching vector representations found above the threshold limit.")
+                    st.warning("⚠️ No vector chunks passed the similarity threshold for this query.")
             else:
-                st.info("💡 RAG Grounding is currently disabled or awaiting prompt generation parameters.")
+                st.info("💡 Enable RAG Grounding in the sidebar and submit a system prompt to view grounded context.")
 
 # --- RIGHT PANEL STATUS COUNTERS ---
 with col_stats:
