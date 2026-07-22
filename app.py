@@ -94,7 +94,17 @@ def restore_auth_session_from_cookie() -> bool:
         return False
 
 
-restore_auth_session_from_cookie()
+refresh_token_cookie = get_refresh_token_cookie()
+restore_attempted = st.session_state.get("auth_restore_attempted", False)
+retry_pending = st.session_state.get("auth_restore_retry_pending", False)
+
+if refresh_token_cookie and (not restore_attempted or retry_pending):
+    st.session_state["auth_restore_attempted"] = True
+    restored = restore_auth_session_from_cookie()
+    if restored:
+        st.session_state.pop("auth_restore_retry_pending", None)
+    else:
+        st.session_state["auth_restore_retry_pending"] = True
 
 if not is_authenticated():
 
