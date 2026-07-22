@@ -36,6 +36,7 @@ from graph import generate_design, generate_design_stream
 from state import DesignState
 from agents.intent_agent import preflight_run, is_affirmative, is_negative
 from uuid import uuid4
+from utils.report_generator import create_pdf_report
 
 # --- STREAMLIT PAGE CONFIG (Must be the very first Streamlit command) ---
 st.set_page_config(page_title="BluePrint-AI Workplace", layout="wide", initial_sidebar_state="expanded")
@@ -803,6 +804,29 @@ with col_workspace:
                             st.markdown(f"  - {issue}")
                         if i < len(res["critic_history"]):
                             st.divider()
+            # ======================================================
+            # Download Report
+            # ======================================================
+            st.divider()
+            st.subheader("📥 Export Report")
+            try:
+                res["problem_statement"] = (
+                   res.get("problem_statement")
+                   or st.session_state.get("last_query", "")
+                )
+                pdf_buffer = create_pdf_report(res)
+                st.download_button(
+                    label="📄 Download PDF Report",
+                    data=pdf_buffer,
+                    file_name="BluePrint_AI_Report.pdf",
+                    mime="application/pdf",
+                    use_container_width=True
+                )
+            except Exception as e:
+                print(e)
+                st.warning(
+                    "⚠ Unable to generate the report right now. Please try again."
+                )
 
         with tab_diagram:
             st.markdown("### Structural Diagram View")
