@@ -18,7 +18,11 @@ from auth.session import (
     get_profile as session_profile,
     clear_auth_session,
     is_authenticated,
+    get_refresh_token_cookie,
+    set_refresh_token_cookie,
+    clear_refresh_token_cookie,
 )
+from auth.supabase_client import supabase
 from llm_client import stream_llm
 from rag.query import (
     fetch_attached_documents,
@@ -28,7 +32,6 @@ from rag.query import (
     fetch_chat_messages,
 )
 from rag.ingest import ingest_uploaded_files, save_generated_blueprint_to_db
-from rag.core import STATIC_USER_ID, STATIC_PROFILE_ID  # noqa: F401 - kept for reference/fallback only
 from graph import generate_design, generate_design_stream
 from state import DesignState
 from agents.intent_agent import preflight_run, is_affirmative, is_negative
@@ -36,6 +39,62 @@ from uuid import uuid4
 
 # --- STREAMLIT PAGE CONFIG (Must be the very first Streamlit command) ---
 st.set_page_config(page_title="BluePrint-AI Workplace", layout="wide", initial_sidebar_state="expanded")
+
+
+def _extract_session(response):
+    session = getattr(response, "session", None)
+    if session is not None:
+        return session
+
+    if getattr(response, "access_token", None) and getattr(response, "refresh_token", None):
+        return response
+
+    return None
+
+
+def restore_auth_session_from_cookie() -> bool:
+    refresh_token = get_refresh_token_cookie()
+    if not refresh_token:
+        return False
+
+    try:
+        response = supabase.auth.refresh_session(refresh_token)
+        session = _extract_session(response)
+        if session is None:
+            return False
+
+        access_token = getattr(session, "access_token", None)
+        new_refresh_token = getattr(session, "refresh_token", None)
+
+        if access_token and new_refresh_token:
+            try:
+                supabase.auth.set_session(access_token, new_refresh_token)
+            except Exception:
+                supabase.postgrest.auth(access_token)
+        elif access_token:
+            supabase.postgrest.auth(access_token)
+
+        user = getattr(response, "user", None) or getattr(session, "user", None)
+        if user is None:
+            user_response = supabase.auth.get_user()
+            user = getattr(user_response, "user", None)
+
+        if user is None:
+            return False
+
+        profile_response = get_profile(user.id)
+        set_auth_user(user, profile_response.data)
+
+        if new_refresh_token and new_refresh_token != refresh_token:
+            set_refresh_token_cookie(new_refresh_token)
+
+        return True
+    except Exception:
+        clear_refresh_token_cookie()
+        return False
+
+
+restore_auth_session_from_cookie()
 
 if not is_authenticated():
 
@@ -57,12 +116,19 @@ if not is_authenticated():
             key="login_password"
         )
 
+        remember_me = st.checkbox(
+            "Remember me on this device",
+            value=True,
+            key="remember_me"
+        )
+
         if st.button("Login"):
 
             try:
                 response = sign_in(
                     email,
-                    password
+                    password,
+                    remember_me=remember_me,
                 )
 
                 user = response.user

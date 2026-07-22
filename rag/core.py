@@ -6,6 +6,7 @@ from typing import Iterable
 from dotenv import load_dotenv
 from sentence_transformers import SentenceTransformer
 from supabase import Client, create_client
+from supabase.client import ClientOptions
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -15,6 +16,7 @@ SUPPORTED_KB_EXTENSIONS = {".md", ".txt"}
 DEFAULT_COLLECTION = "system_design"
 USER_UPLOAD_COLLECTION = "user_uploads"
 DEFAULT_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+SUPABASE_CLIENT_TIMEOUT_SECONDS = int(os.getenv("SUPABASE_CLIENT_TIMEOUT_SECONDS", "15"))
 
 
 # 1.SET UP THE SUPABASE ENDPOINT
@@ -25,7 +27,16 @@ def get_supabase_client() -> Client:
     if not url or not service_role:
         raise ValueError("SUPABASE_URL or SUPABASE_SERVICE_ROLE is missing from .env")
 
-    return create_client(url, service_role)
+    return create_client(
+        url,
+        service_role,
+        options=ClientOptions(
+            postgrest_client_timeout=SUPABASE_CLIENT_TIMEOUT_SECONDS,
+            storage_client_timeout=SUPABASE_CLIENT_TIMEOUT_SECONDS,
+            auto_refresh_token=False,
+            persist_session=False,
+        ),
+    )
 
 # LOADING EMBEDDING MODEL ONLY ONCE
 @lru_cache(maxsize=1)

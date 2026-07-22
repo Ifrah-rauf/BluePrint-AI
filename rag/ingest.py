@@ -90,9 +90,9 @@ def ingest_knowledge_base(
 
 def ingest_uploaded_files(
     uploaded_files,
+    user_id: str,
+    profile_id: int,
     collection: str = USER_UPLOAD_COLLECTION,
-    user_id: str | None = None,
-    profile_id: int | None = None,
     session_id: str | None = None,
 ):
     """
@@ -212,12 +212,15 @@ def insert_document_to_db(
 def save_generated_blueprint_to_db(
     problem_statement: str,
     design_result: dict,
-    user_id: str = STATIC_USER_ID,
-    profile_id: int = STATIC_PROFILE_ID,
+    user_id: str,
+    profile_id: int,
 ):
     """
     Save a completed design blueprint into the Supabase documents table.
     """
+    if not user_id or profile_id is None:
+        raise ValueError("save_generated_blueprint_to_db requires an explicit user_id and profile_id")
+
     try:
         supabase = get_supabase_client()
         embedding_model = get_embedding_model()
