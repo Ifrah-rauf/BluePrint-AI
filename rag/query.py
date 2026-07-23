@@ -543,7 +543,7 @@ def fetch_chat_messages(session_id: str) -> list[dict[str, Any]]:
             supabase.table("chat_messages")
             .select("id, session_id, role, message, created_at")
             .eq("session_id", session_id)
-            .order("created_at", asc=True)
+            .order("created_at", desc=False)
             .execute()
         )
         return res.data or []
