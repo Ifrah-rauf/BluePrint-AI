@@ -1,7 +1,6 @@
 from state import TechStackOutput, DesignState
 from llm_client import call_llm
 from prompts import TECHSTACK_PROMPT
-from rag.query import build_combined_rag_context
 import sys
 import json
 #run fuction
@@ -22,17 +21,11 @@ def tech_run(
         RuntimeError: If the LLM call or validation fails.
     """
     try:
-        rag_context = build_combined_rag_context(
-            user_query=json.dumps(requirements, ensure_ascii=False),
-            user_id=user_id,
-            profile_id=profile_id,
-            session_id=session_id,
-        )
         response = call_llm(
             TECHSTACK_PROMPT,
             {
                 "requirements": requirements,
-                "rag_context": rag_context,
+                "rag_context": "",
             },
         )
         validated = TechStackOutput.model_validate(response)

@@ -34,7 +34,7 @@ from rag.query import (
     fetch_chat_sessions,
     save_chat_message,
     fetch_chat_messages,
-    build_combined_rag_context,
+    build_document_rag_context,
 )
 from rag.ingest import ingest_uploaded_files, save_generated_blueprint_to_db
 from graph import generate_design_stream
@@ -212,6 +212,20 @@ def _is_generate_command(user_input: str) -> bool:
     return any(re.search(pattern, text) for pattern in command_patterns)
 
 
+def _is_document_request(user_input: str) -> bool:
+    text = user_input.strip().lower()
+    if not text:
+        return False
+
+    document_patterns = (
+        r"\bread\b.*\b(file|files|document|documents|attachment|attachments)\b",
+        r"\b(search|find|show|summarize|inspect|review|retrieve)\b.*\b(file|files|document|documents|attachment|attachments)\b",
+        r"\b(uploaded files?)\b",
+        r"\b(my|the)\s+(file|files|document|documents|attachment|attachments)\b",
+    )
+    return any(re.search(pattern, text) for pattern in document_patterns)
+
+
 def _resolve_generation_prompt(user_input: str, fallback_prompt: str | None = None) -> str | None:
     text = user_input.strip()
     if not text:
@@ -251,19 +265,20 @@ def _summarize_current_design(result: dict) -> str:
 
 
 def _build_answer_context(user_input: str) -> str:
-    rag_context = build_combined_rag_context(
-        user_query=user_input,
-        user_id=USER_ID,
-        profile_id=PROFILE_ID,
-        session_id=st.session_state.session_id,
-    )
     design_context = _summarize_current_design(st.session_state.result)
 
     blocks = []
     if design_context:
         blocks.append("Current Design Context:\n" + design_context)
-    if rag_context and rag_context != "No relevant retrieved documents.":
-        blocks.append("Relevant Context:\n" + rag_context)
+    if _is_document_request(user_input):
+        rag_context = build_document_rag_context(
+            user_query=user_input,
+            user_id=USER_ID,
+            profile_id=PROFILE_ID,
+            session_id=st.session_state.session_id,
+        )
+        if rag_context and rag_context != "No relevant retrieved documents.":
+            blocks.append("Relevant Documents:\n" + rag_context)
 
     return "\n\n".join(blocks)
 
@@ -289,17 +304,11 @@ def _answer_user_message(user_input: str) -> str:
     return ""
 
 
-def _run_design_generation(prompt: str, status=None) -> None:
+def _run_design_generation(prompt: str) -> None:
     if not prompt:
         st.error("No generation prompt was available.")
         return
 
-    if status is None:
-        with st.status("Running multi-agent pipeline...", expanded=True) as local_status:
-            _run_design_generation(prompt, status=local_status)
-        return
-
-    status.update(label="Running multi-agent pipeline...", state="running")
     final_state = _empty_design_result()
     revision_pass = 0
     for update in generate_design_stream(
@@ -311,21 +320,21 @@ def _run_design_generation(prompt: str, status=None) -> None:
         for node_name, node_output in update.items():
             final_state.update(node_output)
             if node_name == "requirements":
-                status.write("✅ Requirements drafted")
+                print("✅ Requirements drafted")
             elif node_name == "techstack":
-                status.write("✅ Tech stack chosen")
+                print("✅ Tech stack chosen")
             elif node_name == "architecture":
                 revision_pass += 1
                 label = "✅ Architecture blueprint ready" if revision_pass == 1 else f"🔁 Architecture revised (pass {revision_pass})"
-                status.write(label)
+                print(label)
             elif node_name == "critic":
                 verdict = node_output.get("critic_verdict", {}).get("verdict", "?")
-                status.write(f"🔍 Critic verdict: {verdict}")
+                print(f"🔍 Critic verdict: {verdict}")
             elif node_name == "diagram":
-                status.write("✅ Diagram generated")
+                print("✅ Diagram generated")
 
     st.session_state.result = final_state
-    status.update(label="Design complete", state="complete")
+    print("Design complete")
 
     save_chat_message(
         st.session_state.session_id,
@@ -464,6 +473,9 @@ if "last_user_prompt" not in st.session_state:
 if "last_answer" not in st.session_state:
     st.session_state.last_answer = None
 
+if "last_document_query" not in st.session_state:
+    st.session_state.last_document_query = None
+
 if "uploaded_files" not in st.session_state:
     st.session_state.uploaded_files = []
 
@@ -490,11 +502,11 @@ attached_file_names = {
 }
 
 with st.sidebar:
-    st.markdown("### ⚙️ Workspace Config")
-    scale_option = st.selectbox("Target Architecture Scale", ["10K Users", "100K Users", "1M Users", "10M+ Users"])
-    enable_rag = st.checkbox("Enable RAG Grounding (Supabase)", value=True)
+    # st.markdown("### ⚙️ Workspace Config")
+    # scale_option = st.selectbox("Target Architecture Scale", ["10K Users", "100K Users", "1M Users", "10M+ Users"])
+    # enable_rag = st.checkbox("Enable RAG Grounding (Supabase)", value=True)
 
-    st.divider()
+    # st.divider()
 
     st.markdown("### 📎 Upload Files")
     if "upload_message" in st.session_state:
@@ -622,15 +634,21 @@ with col_workspace:
             with st.chat_message(msg.get("role", "user")):
                 st.write(msg.get("message", ""))
 
+    design_panel = st.container()
+
     chat_placeholder = "Ask a question or add 'generate design' when you want a blueprint."
     user_input = st.chat_input(chat_placeholder)
 
     if user_input:
         previous_prompt = st.session_state.last_user_prompt
         st.session_state.last_user_prompt = user_input
+        if _is_document_request(user_input):
+            st.session_state.last_document_query = user_input
+        else:
+            st.session_state.last_document_query = None
         save_chat_message(active_session_id, USER_ID, "user", user_input)
 
-        with st.status("Processing your request...", expanded=False) as turn_status:
+        with st.spinner("Processing your request..."):
             answer_text = _answer_user_message(user_input)
             st.session_state.last_answer = answer_text
             save_chat_message(
@@ -640,183 +658,167 @@ with col_workspace:
                 answer_text or "I do not have a direct answer for that request."
             )
 
-            generation_prompt = _resolve_generation_prompt(user_input, fallback_prompt=previous_prompt)
-            if generation_prompt:
-                turn_status.update(label="Generating design...", state="running")
-                _run_design_generation(generation_prompt, status=turn_status)
-            else:
-                turn_status.update(label="Response ready", state="complete")
-
+        generation_prompt = _resolve_generation_prompt(user_input, fallback_prompt=previous_prompt)
+        if generation_prompt:
+            with st.spinner("Generating design..."):
+                _run_design_generation(generation_prompt)
+            st.rerun()
     res = st.session_state.result
 
     # Display workspace output tabs if engine has executed successfully
-    if res.get("requirements") or res.get("architecture"):
-        tab_doc, tab_diagram, tab_rag = st.tabs([
-            "📄 Generated Specification",
-            "📊 System Flowchart",
-            "📚 Grounded Context"
-        ])
+    with design_panel:
+        if res.get("requirements") or res.get("architecture"):
+            tab_doc, tab_diagram, tab_rag = st.tabs([
+                "📄 Generated Specification",
+                "📊 System Flowchart",
+                "📚 Grounded Context"
+            ])
 
-        with tab_doc:
-            # ── Requirements ────────────────────────────────────────────
-            st.markdown("## 🎯 System Requirements")
-            if isinstance(res.get("requirements"), dict):
-                req = res["requirements"]
-                cols = st.columns(2)
-                with cols[0]:
-                    st.markdown("**Functional**")
-                    for r in req.get("functional_requirements", []):
-                        st.markdown(f"- {r}")
-                    st.markdown(f"**Scale:** `{req.get('scale', '—')}`")
-                with cols[1]:
-                    st.markdown("**Non-Functional**")
-                    for r in req.get("non_functional_requirements", []):
-                        st.markdown(f"- {r}")
-                    if req.get("constraints"):
-                        st.markdown("**Constraints**")
-                        for c in req["constraints"]:
-                            st.markdown(f"- {c}")
-            else:
-                st.write(res.get("requirements"))
-
-            # ── Tech Stack ───────────────────────────────────────────────
-            st.markdown("## 💻 Chosen Technology Stack")
-            if isinstance(res.get("techstack"), dict):
-                stack = res["techstack"].get("stack", [])
-                if stack:
-                    header_cols = st.columns([2, 2, 4])
-                    header_cols[0].markdown("**Component**")
-                    header_cols[1].markdown("**Selected**")
-                    header_cols[2].markdown("**Why**")
-                    st.divider()
-                    for item in stack:
-                        row = st.columns([2, 2, 4])
-                        row[0].markdown(f"`{item.get('component', '')}`")
-                        row[1].markdown(f"**{item.get('choice', '')}**")
-                        row[2].markdown(item.get('justification', ''))
-            else:
-                st.write(res.get("techstack"))
-
-            # ── Architecture ─────────────────────────────────────────────
-            st.markdown("## 🏛️ Architectural Blueprint")
-            if isinstance(res.get("architecture"), dict):
-                arch = res["architecture"]
-
-                if arch.get("design_description"):
-                    st.markdown(f"> {arch['design_description']}")
-
-                st.markdown("### Components")
-                for comp in arch.get("components", []):
-                    with st.container(border=True):
-                        st.markdown(f"**{comp.get('name', '')}**")
-                        st.caption(comp.get('responsibility', ''))
-                        deps = comp.get("connects_to") or comp.get("depends_on") or []
-                        if deps:
-                            st.markdown("*Depends on:* " + " · ".join([f"`{d}`" for d in deps]))
-
-                if arch.get("tradeoffs"):
-                    with st.expander("⚖️ Tradeoffs"):
-                        for t in arch["tradeoffs"]:
-                            st.markdown(f"- {t}")
-            else:
-                st.write(res.get("architecture"))
-
-            # ── Critic Verdict ───────────────────────────────────────────
-            if res.get("critic_verdict"):
-                verdict = res["critic_verdict"]
-                is_approved = verdict.get("verdict") == "APPROVE"
-                st.markdown("## 🔍 Agentic Critic Verdict")
-                if is_approved:
-                    st.success("✅ **Status: APPROVED**")
+            with tab_doc:
+                # ── Requirements ────────────────────────────────────────────
+                st.markdown("## 🎯 System Requirements")
+                if isinstance(res.get("requirements"), dict):
+                    req = res["requirements"]
+                    cols = st.columns(2)
+                    with cols[0]:
+                        st.markdown("**Functional**")
+                        for r in req.get("functional_requirements", []):
+                            st.markdown(f"- {r}")
+                        st.markdown(f"**Scale:** `{req.get('scale', '—')}`")
+                    with cols[1]:
+                        st.markdown("**Non-Functional**")
+                        for r in req.get("non_functional_requirements", []):
+                            st.markdown(f"- {r}")
+                        if req.get("constraints"):
+                            st.markdown("**Constraints**")
+                            for c in req["constraints"]:
+                                st.markdown(f"- {c}")
                 else:
-                    st.error("🔴 **Status: REVISE**")
-                    issues = verdict.get("issues", [])
-                    if issues:
-                        st.markdown("**Issues Found:**")
-                        for issue in issues:
-                            st.markdown(f"- {issue}")
+                    st.write(res.get("requirements"))
 
-            # ── Revision History ─────────────────────────────────────────
-            if res.get("critic_history"):
-                with st.expander(f"⏳ Revision History ({len(res['critic_history'])} iterations)"):
-                    for i, review in enumerate(res["critic_history"], start=1):
-                        verdict_val = review.get("verdict", "")
-                        icon = "✅" if verdict_val == "APPROVE" else "🔴"
-                        st.markdown(f"**{icon} Iteration {i} — {verdict_val}**")
-                        for issue in review.get("issues", []):
-                            st.markdown(f"  - {issue}")
-                        if i < len(res["critic_history"]):
-                            st.divider()
-            # ======================================================
-            # Download Report
-            # ======================================================
-            st.divider()
-            st.subheader("📥 Export Report")
-            try:
-                res["problem_statement"] = (
-                   res.get("problem_statement")
-                   or st.session_state.get("last_query", "")
-                )
-                pdf_buffer = create_pdf_report(res)
-                st.download_button(
-                    label="📄 Download PDF Report",
-                    data=pdf_buffer,
-                    file_name="BluePrint_AI_Report.pdf",
-                    mime="application/pdf",
-                    use_container_width=True
-                )
-            except Exception as e:
-                print(e)
-                st.warning(
-                    "⚠ Unable to generate the report right now. Please try again."
-                )
+                # ── Tech Stack ───────────────────────────────────────────────
+                st.markdown("## 💻 Chosen Technology Stack")
+                if isinstance(res.get("techstack"), dict):
+                    stack = res["techstack"].get("stack", [])
+                    if stack:
+                        header_cols = st.columns([2, 2, 4])
+                        header_cols[0].markdown("**Component**")
+                        header_cols[1].markdown("**Selected**")
+                        header_cols[2].markdown("**Why**")
+                        st.divider()
+                        for item in stack:
+                            row = st.columns([2, 2, 4])
+                            row[0].markdown(f"`{item.get('component', '')}`")
+                            row[1].markdown(f"**{item.get('choice', '')}**")
+                            row[2].markdown(item.get('justification', ''))
+                else:
+                    st.write(res.get("techstack"))
 
-        with tab_diagram:
-            st.markdown("### Structural Diagram View")
-            if res.get("diagram") and "mermaid_diagram" in res["diagram"]:
-                diagram = res["diagram"]["mermaid_diagram"]
-                print(repr(diagram))
+                # ── Architecture ─────────────────────────────────────────────
+                st.markdown("## 🏛️ Architectural Blueprint")
+                if isinstance(res.get("architecture"), dict):
+                    arch = res["architecture"]
 
-                with st.container(border=True):
-                    render_mermaid_chart(diagram, height=450)
-            else:
-                st.info("No active diagram matrix generated for this workflow task yet.")
-            st.caption("💡 Tip: This visual blueprint updates dynamically based on consensus architectural constraints.")
+                    if arch.get("design_description"):
+                        st.markdown(f"> {arch['design_description']}")
 
-        with tab_rag:
-            st.markdown("### 📚 Grounded Context & Source Transparency")
-            st.caption("The vector chunks below were retrieved from Supabase `pgvector` and supplied to the agents as grounded context:")
+                    st.markdown("### Components")
+                    for comp in arch.get("components", []):
+                        with st.container(border=True):
+                            st.markdown(f"**{comp.get('name', '')}**")
+                            st.caption(comp.get('responsibility', ''))
+                            deps = comp.get("connects_to") or comp.get("depends_on") or []
+                            if deps:
+                                st.markdown("*Depends on:* " + " · ".join([f"`{d}`" for d in deps]))
 
-            problem_stmt = (
-                res.get("problem_statement")
-                or st.session_state.last_user_prompt
-            )
+                    if arch.get("tradeoffs"):
+                        with st.expander("⚖️ Tradeoffs"):
+                            for t in arch["tradeoffs"]:
+                                st.markdown(f"- {t}")
+                else:
+                    st.write(res.get("architecture"))
 
-            if enable_rag and problem_stmt:
-                with st.spinner("📚 Fetching semantic grounding vectors from Supabase..."):
-                    fetched_sources = search_relevant_docs(
-                        problem_stmt,
-                        limit=3,
-                        user_id=USER_ID,
-                        profile_id=PROFILE_ID,
+                # ── Critic Verdict ───────────────────────────────────────────
+                if res.get("critic_verdict"):
+                    verdict = res["critic_verdict"]
+                    is_approved = verdict.get("verdict") == "APPROVE"
+                    st.markdown("## 🔍 Agentic Critic Verdict")
+                    if is_approved:
+                        st.success("✅ **Status: APPROVED**")
+                    else:
+                        st.error("🔴 **Status: REVISE**")
+                        issues = verdict.get("issues", [])
+                        if issues:
+                            st.markdown("**Issues Found:**")
+                            for issue in issues:
+                                st.markdown(f"- {issue}")
+
+                # ── Revision History ─────────────────────────────────────────
+                if res.get("critic_history"):
+                    with st.expander(f"⏳ Revision History ({len(res['critic_history'])} iterations)"):
+                        for i, review in enumerate(res["critic_history"], start=1):
+                            verdict_val = review.get("verdict", "")
+                            icon = "✅" if verdict_val == "APPROVE" else "🔴"
+                            st.markdown(f"**{icon} Iteration {i} — {verdict_val}**")
+                            for issue in review.get("issues", []):
+                                st.markdown(f"  - {issue}")
+                            if i < len(res["critic_history"]):
+                                st.divider()
+                # ======================================================
+                # Download Report
+                # ======================================================
+                st.divider()
+                st.subheader("📥 Export Report")
+                try:
+                    res["problem_statement"] = (
+                    res.get("problem_statement")
+                    or st.session_state.get("last_query", "")
+                    )
+                    pdf_buffer = create_pdf_report(res)
+                    st.download_button(
+                        label="📄 Download PDF Report",
+                        data=pdf_buffer,
+                        file_name="BluePrint_AI_Report.pdf",
+                        mime="application/pdf",
+                        use_container_width=True
+                    )
+                except Exception as e:
+                    print(e)
+                    st.warning(
+                        "⚠ Unable to generate the report right now. Please try again."
                     )
 
-                if fetched_sources:
-                    st.success(f"🎯 Grounded across {len(fetched_sources)} relevant reference chunk(s):")
-                    for idx, doc in enumerate(fetched_sources, start=1):
-                        title = doc.get("title") or "Untitled Chunk"
-                        sim = doc.get("similarity", 0.0)
-                        sim_pct = f"{sim * 100:.1f}% match"
-                        coll = doc.get("collection") or "unknown"
-                        src = doc.get("source") or "unknown"
+            with tab_diagram:
+                st.markdown("### Structural Diagram View")
+                if res.get("diagram") and "mermaid_diagram" in res["diagram"]:
+                    diagram = res["diagram"]["mermaid_diagram"]
+                    print(repr(diagram))
 
-                        with st.expander(f"📄 [{idx}] {title} — `{sim_pct}`"):
-                            st.caption(f"📍 Collection: `{coll}` | Source: `{src}`")
-                            st.markdown(f"```text\n{doc.get('content', '')}\n```")
+                    with st.container(border=True):
+                        render_mermaid_chart(diagram, height=450)
                 else:
-                    st.warning("⚠️ No vector chunks passed the similarity threshold for this query.")
-            else:
-                st.info("💡 Enable RAG Grounding in the sidebar and submit a system prompt to view grounded context.")
+                    st.info("No active diagram matrix generated for this workflow task yet.")
+                st.caption("💡 Tip: This visual blueprint updates dynamically based on consensus architectural constraints.")
+
+            with tab_rag:
+                document_query = st.session_state.last_document_query
+                if document_query:
+                    st.markdown("### 📚 Retrieved Documents")
+                    with st.spinner("📚 Fetching matching documents from Supabase..."):
+                        fetched_sources = build_document_rag_context(
+                            user_query=document_query,
+                            user_id=USER_ID,
+                            profile_id=PROFILE_ID,
+                            session_id=st.session_state.session_id,
+                        )
+
+                    if fetched_sources and fetched_sources != "No relevant retrieved documents.":
+                        st.success("🎯 Matching documents found:")
+                        st.markdown(fetched_sources)
+                    else:
+                        st.info("No matching documents found for that request.")
+                else:
+                    st.info("Document search results appear here only when you ask to read or search files.")
 
 # --- RIGHT PANEL STATUS COUNTERS ---
 with col_stats:
@@ -828,7 +830,9 @@ with col_stats:
         disabled=not bool(latest_prompt),
     ):
         if latest_prompt:
-            _run_design_generation(latest_prompt)
+            with st.spinner("Generating design..."):
+                _run_design_generation(latest_prompt)
+            st.rerun()          # 👈 add this
         else:
             st.warning("Ask a question first so I have a prompt to generate from.")
 

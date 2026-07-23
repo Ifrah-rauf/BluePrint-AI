@@ -313,7 +313,7 @@ def build_rag_context(
     return format_retrieved_docs(docs)
 
 
-def build_combined_rag_context(
+def build_document_rag_context(
     user_query: str,
     limit: int = 3,
     match_threshold: float = 0.4,
@@ -357,6 +357,27 @@ def build_combined_rag_context(
         return "No relevant retrieved documents."
 
     return "\n\n".join(blocks)
+
+
+def build_combined_rag_context(
+    user_query: str,
+    limit: int = 3,
+    match_threshold: float = 0.4,
+    user_id: str | None = None,
+    profile_id: int | None = None,
+    session_id: str | None = None,
+) -> str:
+    """
+    Backwards-compatible alias for document-grounded retrieval context.
+    """
+    return build_document_rag_context(
+        user_query=user_query,
+        limit=limit,
+        match_threshold=match_threshold,
+        user_id=user_id,
+        profile_id=profile_id,
+        session_id=session_id,
+    )
 
 
 def fetch_recent_blueprints(

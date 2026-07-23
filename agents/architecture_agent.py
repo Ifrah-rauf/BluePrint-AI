@@ -1,7 +1,6 @@
 from state import ArchitectureOutput
 from llm_client import call_llm
 from prompts import ARCHITECTURE_PROMPT
-from rag.query import build_combined_rag_context
 import sys
 import json
 
@@ -44,18 +43,6 @@ def arch_run(
         RuntimeError: If the LLM call or validation fails.
     """
     try:
-        rag_query_parts = [
-            problem_statement or "",
-            json.dumps(requirements, ensure_ascii=False),
-            json.dumps(techstack, ensure_ascii=False),
-            json.dumps(revision_notes or [], ensure_ascii=False),
-        ]
-        rag_context = build_combined_rag_context(
-            user_query="\n".join(part for part in rag_query_parts if part).strip(),
-            user_id=user_id,
-            profile_id=profile_id,
-            session_id=session_id,
-        )
         response = call_llm(
             ARCHITECTURE_PROMPT,
             {
@@ -64,7 +51,7 @@ def arch_run(
                 "techstack": techstack,
                 "previous_architecture": previous_architecture,
                 "revision_notes": revision_notes,
-                "rag_context": rag_context,
+                "rag_context": "",
             },
         )
         response["revision_count"] = revision_count

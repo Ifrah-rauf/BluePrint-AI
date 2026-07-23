@@ -1,7 +1,6 @@
 from state import RequirementsOutput, DesignState
 from llm_client import call_llm
 from prompts import REQUIREMENTS_PROMPT
-from rag.query import build_combined_rag_context
 import sys
 import json
 #run fuction
@@ -22,17 +21,11 @@ def req_run(
         RuntimeError: If the LLM call or validation fails.
     """
     try:
-        rag_context = build_combined_rag_context(
-            user_query=problem_statement,
-            user_id=user_id,
-            profile_id=profile_id,
-            session_id=session_id,
-        )
         response = call_llm(
             REQUIREMENTS_PROMPT,
             {
                 "problem_statement": problem_statement,
-                "rag_context": rag_context,
+                "rag_context": "",
             },
         )
         validated = RequirementsOutput.model_validate(response)

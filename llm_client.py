@@ -6,12 +6,13 @@ import dotenv
 
 dotenv.load_dotenv()
 
-# client = OpenAI(
-#         base_url="https://openrouter.ai/api/v1",
-#         api_key=os.getenv("GROQ_API_KEY"),
-#     )
-client = Groq(api_key=os.environ["GROQ_API_KEY"])
-
+client = OpenAI(
+        base_url="https://openrouter.ai/api/v1",
+        api_key=os.getenv("OPENROUTER_API_KEY"),
+    )
+model="nvidia/nemotron-3-super-120b-a12b:free"
+# client = Groq(api_key=os.environ["GROQ_API_KEY"])
+# google/gemma-4-31b-it:free
 def _format_payload(payload) -> str:
     if isinstance(payload, dict):
         lines = []
@@ -32,7 +33,7 @@ def call_llm(system_prompt: str, *inputs) -> dict:
         user_content = _format_payload(inputs)
     try:
         response = client.chat.completions.create(
-           model="llama-3.3-70b-versatile",
+           model=model,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_content}
@@ -60,7 +61,7 @@ def stream_llm(system_prompt: str, *inputs):
         user_content = _format_payload(inputs)
 
     response_stream = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model=model,
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content}
