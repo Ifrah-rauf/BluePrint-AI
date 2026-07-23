@@ -46,14 +46,7 @@ Beyond the AI behavior, the app is a **multi-user, auth-gated product**: every u
 ---
 
 ## Architecture
-
-> **📌 Placeholder — insert system architecture diagram here.**
-> Suggested contents: Streamlit frontend ↔ Auth layer (Supabase Auth) ↔ App/session layer ↔ LangGraph agent pipeline ↔ Supabase (Postgres + pgvector) for persistence and retrieval.
-
-```
-<!-- assets/architecture-diagram.png -->
-![Architecture Diagram](./assets/architecture-diagram.png)
-```
+<img src="diagrams/s4.png"></img>
 
 **High-level flow:**
 
@@ -75,12 +68,7 @@ The backend intentionally separates **identity** from **data access**:
 ## RAG Pipeline
 
 > **📌 Placeholder — insert RAG / retrieval pipeline diagram here.**
-> Suggested contents: Query → identity filter (auth user + profile ID) → vector search over `documents` → keyword fallback (if vector/RPC fails) → context builder → LangGraph agents.
-
-```
-<!-- assets/rag-pipeline-diagram.png -->
-![RAG Pipeline Diagram](./assets/rag-pipeline-diagram.png)
-```
+<img src="diagrams/s1.png"></img>
 
 **Retrieval flow:**
 
@@ -165,7 +153,6 @@ Notes:
 ---
 
 ## Retrieval / RAG Details
-
 - **Semantic search** over the `documents` table using vector embeddings.
 - **Identity-aware filtering**: every query is scoped by `auth.users` ID and `profiles` ID — retrieval is never global.
 - **Keyword fallback**: if vector search (or its RPC) fails, the system falls back to keyword matching rather than returning nothing.
@@ -180,7 +167,7 @@ Notes:
 ---
 
 ## Architecture / Pipeline (Implementation Notes)
-
+<img src="diagrams/s3.png"></img>
 - **Frontend**: Streamlit.
 - **Orchestration**: LangGraph-based multi-agent pipeline.
 - **Agents**: dedicated agents for requirements, tech stack, architecture, diagram generation, and critique — each with a narrow, single responsibility.
